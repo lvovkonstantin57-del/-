@@ -293,8 +293,8 @@ async def test_schedule_edits_notify_group(client, seeded):
     await client.delete(f"/api/admin/lessons/{lessons[0]['id']}", headers=boss.h)
     items = (await client.get("/api/notifications", headers=stud.h)).json()["items"]
     assert [n["kind"] for n in items] == ["schedule", "schedule"]
-    assert "Было: Вт, 09:00 — Химия\nСтало: Вт, 09:00 — Химия-2" in items[1]["body"]
-    assert items[0]["body"].startswith("Пары больше нет: Вт, 09:00 — Химия-2")
+    assert "Было: Вт, 09:00–10:30 — Химия, ауд. 401\nСтало: Вт, 09:00–10:30 — Химия-2, ауд. 401" in items[1]["body"]
+    assert items[0]["body"].startswith("Пары больше нет: Вт, 09:00–10:30 — Химия-2, ауд. 401")
 
 
 # --- расписание и админка ------------------------------------------------------------

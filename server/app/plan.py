@@ -9,9 +9,9 @@ from datetime import date, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import attendance, db, schedule
+from app import attendance, schedule
 from app.config import config
-from app.models import Lesson, User
+from app.models import User
 
 DAYS_AHEAD = 10
 # iOS держит не больше 64 запланированных уведомлений на приложение
@@ -36,10 +36,11 @@ def _item(key: str, at: datetime, title: str, body: str, kind: str) -> dict:
     return {"id": notification_id(key), "at": at.isoformat(), "title": title, "body": body, "kind": kind}
 
 
-def _student_line(l: Lesson, show_half: bool) -> str:
+def _student_line(l: schedule.Slot, show_half: bool) -> str:
     parts = [f"{l.start_time}–{l.end_time}"]
     if l.room:
-        parts.append(schedule.room_text(l.room))
+        old = l.was.get("room")
+        parts.append(schedule.room_text(l.room) + (f" (вместо {old})" if old else ""))
     if l.kind:
         parts.append(l.kind)
     if l.teacher:
@@ -72,27 +73,33 @@ async def build(s: AsyncSession, user: User, now: datetime | None = None, days: 
     now = now or datetime.now(config.tz)
     if not user.notify_before and not user.digest_time:
         return []
-    semester_start = await db.get_semester_start(s)
     student = user.student is not None
     if not student and not user.is_teacher:
         return []
-    mine = [] if student else await attendance.teacher_lessons(s, user.teacher)
-    if not student and not mine:
-        return []
+    today = now.date()
+    # +1 день — для сводки «на завтра» в последний день
+    dates = [today + timedelta(days=i) for i in range(days + 1)]
+    if student:
+        by_day = await schedule.group_days(s, user.group_name, dates, user.half)
+    else:
+        by_day = await attendance.teacher_days(s, user.teacher, dates)
+        if not any(day.lessons or day.cancelled for day in by_day.values()) \
+                and not await attendance.teacher_lessons(s, user.teacher):
+            return []
 
     async def day_rows(d: date) -> tuple[list[tuple[str, int | str, str, str]], list[tuple[str, str, str]]]:
         """(для напоминаний: начало, ключ, предмет, строка), (для сводки: начало, предмет, аудитория)."""
+        lessons = by_day[d].lessons
         if student:
-            lessons = await schedule.lessons_on(s, user.group_name, d, user.half)
             show_half = user.half is None
-            return ([(l.start_time, l.id, l.subject, _student_line(l, show_half)) for l in lessons],
+            # У разовой пары нет id в расписании — ключом служит номер изменения
+            return ([(l.start_time, l.id or f"x{l.change_id}", l.subject, _student_line(l, show_half)) for l in lessons],
                     [(l.start_time, l.subject, l.room) for l in lessons])
-        items = attendance.teacher_day(mine, d, semester_start)
+        items = attendance.teacher_items(lessons)
         return ([(i["start"], f"{i['subject']}|{','.join(i['groups'])}", i["subject"], _teacher_line(i)) for i in items],
                 [(i["start"], i["subject"], i["room"]) for i in items])
 
     out: list[dict] = []
-    today = now.date()
     for offset in range(days):
         d = today + timedelta(days=offset)
         reminders, digest_rows = await day_rows(d)

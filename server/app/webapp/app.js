@@ -54,6 +54,19 @@ const WD_SHORT = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"];
 const MONTHS = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа",
   "сентября", "октября", "ноября", "декабря"];
 const PARITY = { odd: "нечётная", even: "чётная", every: "каждая" };
+
+// Свои номера недель, как их хранит сервер: «1-4,6», «2/3» (со 2-й каждую 3-ю), «1-16/2»
+function weeksMatch(spec, n) {
+  return (spec || "").split(",").some((item) => {
+    const m = /^(\d+)(?:-(\d+))?(?:\/(\d+))?$/.exec(item.trim());
+    if (!m) return false;
+    const first = Number(m[1]), step = Number(m[3] || 1);
+    const last = m[2] ? Number(m[2]) : m[3] ? Infinity : first;
+    return n >= first && n <= last && (n - first) % step === 0;
+  });
+}
+const lessonOnWeek = (l, n) => (l.week === "custom" ? weeksMatch(l.weeks, n)
+  : l.week === "every" || l.week === (n % 2 ? "odd" : "even"));
 const KINDS = ["лекция", "практика", "лабораторная", "семинар", "экзамен", "зачёт"];
 const WINDOW_MIN = 60; // перерыв от часа — уже «окно»
 const ROLE_LABELS = { owner: "главный админ", admin: "админ", starosta: "староста", user: "студент" };
@@ -93,6 +106,8 @@ const ICONS = {
   expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   refresh: '<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4.5h-4.5"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  camera: '<path d="M4 8.5A2.5 2.5 0 0 1 6.5 6H8l1.5-2.5h5L16 6h1.5A2.5 2.5 0 0 1 20 8.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5z"/><circle cx="12" cy="12.5" r="3.5"/>',
+  calEdit: '<path d="M11 21.5H7a4 4 0 0 1-4-4v-9a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v3"/><path d="M8 2.5v4M16 2.5v4M3 10h18"/><path d="M19.4 14.6a1.6 1.6 0 0 1 2.3 2.3L17 21.5l-3 .7.7-3z"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/>',
 };
 
@@ -419,6 +434,8 @@ function renderWeek(animation) {
     if (i === state.selectedDay) cls.push("active");
     if (d.date === w.today) cls.push("today");
     if (!d.lessons.length) cls.push("empty");
+    // Что-то поменяли на этот день — точка под числом
+    if (d.cancelled?.length || d.lessons.some((l) => l.status)) cls.push("changed");
     return el("button", {
       class: cls.join(" "),
       "aria-label": `${WEEKDAYS[i]}, ${parseDate(d.date).getDate()}`,
@@ -483,6 +500,24 @@ function dayLabel(title) {
     el("b", {}, title), el("span", {}, `${w.week_number} неделя · ${PARITY[w.parity]}`));
 }
 
+// Эмблема МПГУ водяным знаком на тёмных карточках
+const emblem = () => el("span", { class: "logo hero-emblem", "aria-hidden": "true" });
+
+// Чем пара в этот день отличается от обычной: «ауд. 410 вместо 401», «перенос с пн»
+function changeText(l) {
+  if (l.status === "extra") return l.moved ? l.note || "Перенос" : ["Разовая пара", l.note].filter(Boolean).join(" · ");
+  if (l.status !== "changed") return null;
+  const w = l.was || {};
+  const parts = [];
+  if ("room" in w) parts.push(`${l.room ? roomText(l.room) : "без аудитории"} вместо ${w.room || "—"}`);
+  if ("start" in w || "end" in w) parts.push(`${l.start}–${l.end} вместо ${w.start || l.start}–${w.end || l.end}`);
+  if ("teacher" in w) parts.push(`ведёт ${l.teacher || "—"}`);
+  if ("subject" in w) parts.push(`вместо «${w.subject}»`);
+  if ("kind" in w) parts.push(l.kind || "другой тип");
+  return [`Только в этот день: ${parts.join(", ") || "есть изменения"}`, l.note].filter(Boolean).join(" · ");
+}
+const changeBadge = (l) => (changeText(l) ? el("div", { class: "change-note" }, icon("calEdit"), changeText(l)) : null);
+
 // Большая карточка: текущая пара или, если сейчас перерыв, следующая
 function heroCard(l, mode, now) {
   const start = toMin(l.start), end = toMin(l.end);
@@ -490,7 +525,8 @@ function heroCard(l, mode, now) {
   const tiles = [];
   if (l.room) {
     tiles.push(el("div", { class: "hero-tile" },
-      el("small", {}, /^\d/.test(l.room) ? "аудитория" : "где"), el("b", { class: "room" }, l.room)));
+      el("small", {}, l.was && "room" in l.was ? "новая аудитория" : /^\d/.test(l.room) ? "аудитория" : "где"),
+      el("b", { class: "room" }, l.room)));
   }
   const who = whoText(l);
   if (who || l.kind) {
@@ -502,11 +538,12 @@ function heroCard(l, mode, now) {
       el("div", { class: "track" }, el("div", { class: "fill", style: `width:${Math.round(((now - start) / (end - start)) * 100)}%` })),
       `ещё ${duration(end - now)}`)
     : el("div", { class: "hero-foot" }, `начнётся через ${duration(start - now)}`);
-  return el("section", { class: "hero" },
+  return el("section", { class: "hero" }, emblem(),
     el("div", { class: "hero-top" },
       el("span", {}, (mode === "now" ? "Сейчас" : "Следующая") + pair), el("span", { class: "num" }, `${l.start}–${l.end}`)),
     el("div", { class: "hero-subject" }, l.subject),
     halfNote(l) ? el("div", { class: "hero-half" }, `Только ${halfNote(l)} группы`) : null,
+    changeText(l) ? el("div", { class: "hero-change" }, changeText(l)) : null,
     tiles.length ? el("div", { class: "hero-tiles" }, ...tiles) : null,
     foot,
     heroAction(l));
@@ -518,7 +555,8 @@ function nextCard(l, now) {
     el("div", { class: "next-top" },
       el("span", { class: "eyebrow" }, "Дальше"), el("span", { class: "chip" }, `через ${duration(toMin(l.start) - now)}`)),
     el("div", { class: "next-subject" }, l.subject),
-    el("div", { class: "next-meta" }, meta));
+    el("div", { class: "next-meta" }, meta),
+    changeBadge(l));
 }
 
 // Пары закончились: подскажем, когда завтра первая
@@ -540,7 +578,8 @@ function dayList(lessons, now) {
       el("span", { class: "t" }, l.start),
       el("span", { class: "s" }, l.subject, halfNote(l) ? el("span", { class: "half" }, ` · ${halfNote(l)}`) : null,
         state.week.mine ? el("span", { class: "half" }, ` · ${whoText(l)}`) : null),
-      el("span", { class: "r" }, l.room || ""));
+      el("span", { class: "r" + (l.was && "room" in l.was ? " changed" : "") }, l.room || ""),
+      l.status ? el("span", { class: "row-change" }, changeText(l)) : null);
   }));
 }
 
@@ -584,9 +623,197 @@ function dayCards(day) {
       el("div", { class: "lc-top" },
         el("b", {}, `${l.start}–${l.end}`), l.pair_num ? el("span", {}, `${l.pair_num} пара`) : null),
       el("div", { class: "lc-subject" }, l.subject),
-      meta.length ? el("div", { class: "lc-meta" }, ...meta.flatMap((m, i) => (i ? [el("span", { class: "sep" }), m] : [m]))) : null));
+      meta.length ? el("div", { class: "lc-meta" }, ...meta.flatMap((m, i) => (i ? [el("span", { class: "sep" }), m] : [m]))) : null,
+      changeBadge(l)));
   });
   return nodes;
+}
+
+// Отменённые в этот день пары — чтобы не ехать зря
+function cancelledCard(day) {
+  if (!day.cancelled?.length) return null;
+  return el("section", { class: "card cancelled-card" },
+    el("div", { class: "eyebrow" }, day.cancelled.length > 1 ? "Отменены" : "Отменена"),
+    ...day.cancelled.map((l) => el("div", { class: "cancelled-row" },
+      el("span", { class: "t" }, l.start),
+      el("span", { class: "s" }, el("b", {}, l.subject), l.note ? el("small", {}, l.note) : null))));
+}
+
+function editDayButton(day) {
+  if (!state.week.can_edit) return null;
+  return el("button", { class: "link-btn edit-day", onclick: () => dayChangesSheet(state.week.group, day.date) },
+    icon("calEdit"), "Изменить расписание на этот день");
+}
+
+// --- разовые изменения на один день (без повторений) -----------------------------------
+
+function longDate(iso) {
+  const d = parseDate(iso);
+  return `${WEEKDAYS[(d.getDay() + 6) % 7]}, ${d.getDate()} ${MONTHS[d.getMonth()]}`;
+}
+
+async function ensureConfig() {
+  if (!state.config) state.config = await api("/api/admin/config");
+  return state.config;
+}
+
+// Поля времени с выбором № пары из сетки звонков
+function timeFields(bells, l = {}) {
+  const pair = el("select", {}, el("option", { value: "" }, "—"),
+    ...bells.map((b, i) => el("option", { value: i + 1, selected: l.pair_num === i + 1 }, `${i + 1} (${b.start}–${b.end})`)));
+  const start = el("input", { type: "time", value: l.start || "" });
+  const end = el("input", { type: "time", value: l.end || "" });
+  pair.onchange = () => {
+    const b = bells[Number(pair.value) - 1];
+    if (b) { start.value = b.start; end.value = b.end; }
+  };
+  return { pair, start, end, values: () => ({ pair_num: pair.value ? Number(pair.value) : null, start: start.value, end: end.value }) };
+}
+
+async function dayChangesSheet(group, iso) {
+  const [bells] = await Promise.all([ensureConfig().then((c) => c.bells).catch(() => [])]);
+  openSheet(longDate(iso), `${formatGroup(group)} · изменения только на этот день, без повторений. Группа получит уведомление.`,
+    (card, close) => {
+      const body = el("div", { class: "sheet-form" }, el("p", { class: "note" }, "Загрузка…"));
+      const error = el("p", { class: "sheet-error", role: "alert" });
+      card.append(body);
+      let day = null;
+
+      async function finish(msg) {
+        hapticResult("success");
+        close();
+        toast(msg);
+        state.week = null;
+        await loadWeek();
+      }
+      async function send(payload, btn, msg = "Готово — группа получит уведомление") {
+        btn.disabled = true;
+        error.textContent = "";
+        try {
+          await api("/api/admin/changes", { method: "POST", body: { group, date: iso, ...payload } });
+          await finish(msg);
+        } catch (e) { error.textContent = e.message; hapticResult("error"); }
+        finally { btn.disabled = false; }
+      }
+      async function undo(id, label) {
+        if (!(await confirmDialog(label, "Да"))) return;
+        try {
+          await api(`/api/admin/changes/${id}`, { method: "DELETE" });
+          await finish("Вернули как было — группа получит уведомление");
+        } catch (e) { error.textContent = e.message; }
+      }
+      const field = (label, input, span) => el("label", { class: span ? "span2" : "" }, label, input);
+      const back = () => el("button", { class: "btn tinted", onclick: list }, "Назад");
+
+      // Другая аудитория, время или преподаватель — либо перенос на другой день
+      function editForm(l) {
+        const t = timeFields(bells, l);
+        const room = el("input", { value: l.room, placeholder: "например, 410" });
+        const teacher = el("input", { value: l.teacher });
+        const note = el("input", { placeholder: "например, лекция в большой аудитории", maxlength: 300 });
+        const toDate = el("input", { type: "date", value: addDays(iso, 1) });
+        const dateBox = el("div", { class: "span2", hidden: true }, field("На какой день", toDate));
+        let mode = "change";
+        const seg = segmented([["change", "В этот же день"], ["move", "На другой день"]], mode, (v) => {
+          mode = v;
+          dateBox.hidden = v !== "move";
+          teacherBox.hidden = v === "move";
+          save.textContent = v === "move" ? "Перенести" : "Сохранить";
+        });
+        seg.classList.add("wide");
+        const teacherBox = field("Преподаватель", teacher, true);
+        const save = el("button", { class: "btn block", onclick: () => {
+          const v = { ...t.values(), room: room.value };
+          if (mode === "move") send({ action: "move", lesson_id: l.id, to_date: toDate.value, ...v, note: note.value }, save, "Пара перенесена — группа получит уведомление");
+          else send({ action: "change", lesson_id: l.id, ...v, teacher: teacher.value, note: note.value }, save);
+        } }, "Сохранить");
+        setChildren(body, el("h3", {}, `${l.start} · ${l.subject}`), seg,
+          el("div", { class: "form-grid" }, dateBox, field("Аудитория", room, true), field("№ пары", t.pair), el("span"),
+            field("Начало", t.start), field("Конец", t.end), teacherBox, field("Пояснение", note, true)),
+          error, save, back());
+        room.focus();
+      }
+
+      function cancelForm(l) {
+        const note = el("textarea", { class: "full", rows: 2, maxlength: 300, placeholder: "Причина — по желанию: «преподаватель заболел»" });
+        const save = el("button", { class: "btn block danger", onclick: () => send({ action: "cancel", lesson_id: l.id, note: note.value }, save, "Пара отменена — группа получит уведомление") },
+          "Отменить пару");
+        setChildren(body, el("h3", {}, `Отменить ${l.subject} в ${l.start}?`),
+          el("p", { class: "note" }, "Только в этот день. В другие недели пара останется."), note, error, save, back());
+      }
+
+      function addForm() {
+        const t = timeFields(bells);
+        const f = {
+          subject: el("input", { placeholder: "Название" }),
+          kind: el("input", { list: "kinds-once", placeholder: "консультация" }),
+          room: el("input"), teacher: el("input"),
+          note: el("input", { maxlength: 300, placeholder: "по желанию" }),
+          half: el("select", {}, el("option", { value: "" }, "вся группа"),
+            el("option", { value: 1 }, "1-я половина"), el("option", { value: 2 }, "2-я половина")),
+        };
+        const save = el("button", { class: "btn block", onclick: () => send({
+          action: "add", subject: f.subject.value, kind: f.kind.value, room: f.room.value, teacher: f.teacher.value,
+          half: f.half.value ? Number(f.half.value) : null, note: f.note.value, ...t.values(),
+        }, save, "Пара добавлена — группа получит уведомление") }, "Добавить пару");
+        setChildren(body, el("h3", {}, "Разовая пара"),
+          el("datalist", { id: "kinds-once" }, ...[...KINDS, "консультация", "отработка"].map((k) => el("option", { value: k }))),
+          el("div", { class: "form-grid" }, field("Предмет", f.subject, true), field("№ пары", t.pair), field("Тип", f.kind),
+            field("Начало", t.start), field("Конец", t.end), field("Аудитория", f.room), field("Половина", f.half),
+            field("Преподаватель", f.teacher, true), field("Пояснение", f.note, true)),
+          error, save, back());
+        f.subject.focus();
+      }
+
+      function list() {
+        error.textContent = "";
+        const rows = day.lessons.map((l) => el("div", { class: "change-row" },
+          el("div", { class: "grow" }, el("b", {}, `${l.start} ${l.subject}`),
+            el("small", {}, changeText(l) || [l.room && roomText(l.room), l.teacher, l.half && `${l.half}-я половина`].filter(Boolean).join(" · "))),
+          el("div", { class: "change-actions" },
+            l.change_id ? el("button", { class: "btn tinted small", onclick: () => undo(l.change_id,
+              l.status === "extra" ? `Убрать «${l.subject}» в этот день?` : `Вернуть «${l.subject}» как по расписанию?`) },
+              l.status === "extra" ? "Убрать" : "Вернуть") : null,
+            l.id ? el("button", { class: "btn tinted small", onclick: () => editForm(l) }, "Изменить") : null,
+            l.id ? el("button", { class: "btn tinted small danger-text", onclick: () => cancelForm(l) }, "Отменить") : null)));
+        const cancelled = day.cancelled.map((l) => el("div", { class: "change-row muted" },
+          el("div", { class: "grow" }, el("b", {}, `${l.start} ${l.subject}`), el("small", {}, l.note || "отменена")),
+          el("button", { class: "btn tinted small", onclick: () => undo(l.change_id,
+            l.moved ? `Отменить перенос «${l.subject}»?` : `Вернуть «${l.subject}» в этот день?`) }, "Вернуть")));
+        setChildren(body, ...rows, ...cancelled,
+          rows.length || cancelled.length ? null : el("p", { class: "note" }, "В этот день пар нет."),
+          error,
+          el("button", { class: "btn tinted block", onclick: addForm }, icon("plus"), "Разовая пара"));
+      }
+
+      api(`/api/schedule?date=${iso}&group=${encodeURIComponent(group)}&edit=1`)
+        .then((w) => { day = w.days.find((x) => x.date === iso); list(); })
+        .catch((e) => setChildren(body, el("p", { class: "sheet-error" }, e.message)));
+    });
+}
+
+// Ближайшие разовые изменения группы — у старосты на главной и в «Парах групп»
+function changesPanel(getGroup) {
+  const box = el("div", { class: "stack" });
+  const date = el("input", { type: "date", value: state.me.today, "aria-label": "День" });
+  async function load() {
+    const group = getGroup();
+    if (!group) { setChildren(box); return; }
+    let items;
+    try { items = await api("/api/admin/changes?group=" + encodeURIComponent(group)); }
+    catch (e) { setChildren(box, el("p", { class: "note" }, e.message)); return; }
+    // Перенос — две записи; показываем одну, со стороны старого дня
+    items = items.filter((c) => !(c.moved && c.action === "add"));
+    setChildren(box,
+      ...items.map((c) => el("div", { class: "item" },
+        el("div", { class: "grow" }, el("div", {}, c.summary), c.note && !c.moved ? el("div", { class: "sub" }, c.note) : null),
+        el("button", { class: "icon-btn", "aria-label": "Открыть день", onclick: () => dayChangesSheet(group, c.date) }, icon("edit")))),
+      items.length ? null : el("p", { class: "note" }, "Разовых изменений нет — всё по расписанию."),
+      el("div", { class: "inline" }, date,
+        el("button", { class: "btn small", onclick: () => date.value && dayChangesSheet(group, date.value) }, "Изменить день")));
+  }
+  load();
+  return { node: box, reload: load };
 }
 
 function renderDay(animation) {
@@ -604,11 +831,12 @@ function renderDay(animation) {
   }
   if (!day.lessons.length) {
     setChildren(box, day.date === w.today ? checkinBanner() : null, dayLabel(day.date === w.today ? "Сегодня" : dayTitle(day)),
-      el("div", { class: "empty-day" }, el("b", {}, "Пар нет"), "Можно отдохнуть 🌿"));
+      el("div", { class: "empty-day" }, el("b", {}, "Пар нет"), day.cancelled?.length ? "Всё отменили" : "Можно отдохнуть 🌿"),
+      cancelledCard(day), editDayButton(day));
     return;
   }
-  if (day.date === w.today) setChildren(box, ...todayView(day));
-  else setChildren(box, dayLabel(dayTitle(day)), ...dayCards(day));
+  if (day.date === w.today) setChildren(box, ...todayView(day), cancelledCard(day), editDayButton(day));
+  else setChildren(box, dayLabel(dayTitle(day)), ...dayCards(day), cancelledCard(day), editDayButton(day));
 }
 
 const MINE = "@mine";
@@ -1114,9 +1342,82 @@ function plural(n, one, few, many) {
   return many;
 }
 
-function avatarNode(name) {
+// Картинки с сервера: в приложении — с адреса сервера, в браузере — с того же сайта
+const mediaUrl = (path) => (path ? SERVER + path : null);
+
+function avatarNode(name, photo) {
   const initials = name.split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
-  return el("div", { class: "avatar" }, el("span", {}, initials));
+  const img = photo ? el("img", { src: mediaUrl(photo), alt: "", loading: "lazy" }) : null;
+  // Не загрузилось — остаются инициалы
+  img?.addEventListener("error", () => img.remove());
+  return el("div", { class: "avatar" }, el("span", {}, initials), img);
+}
+
+// Квадратное фото 512×512 в JPEG: обрезаем по центру, метаданные (геопозиция) не попадают
+async function squareJpeg(file, size = 512) {
+  const url = URL.createObjectURL(file);
+  try {
+    const img = await new Promise((ok, fail) => {
+      const i = new Image();
+      i.onload = () => ok(i);
+      i.onerror = () => fail(new Error("Не получилось открыть картинку — выбери другую"));
+      i.src = url;
+    });
+    const side = Math.min(img.naturalWidth, img.naturalHeight);
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = size;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, size, size);
+    ctx.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, size, size);
+    return canvas.toDataURL("image/jpeg", 0.85);
+  } finally { URL.revokeObjectURL(url); }
+}
+
+function pickImage() {
+  return new Promise((resolve) => {
+    const input = el("input", { type: "file", accept: "image/*", hidden: true });
+    input.onchange = () => { resolve(input.files[0] || null); input.remove(); };
+    document.body.append(input);
+    input.click();
+  });
+}
+
+function photoChanged(photo) {
+  state.me.photo = photo;
+  renderProfile();
+  setChildren($("me-avatar"), avatarNode(displayName(state.me) || "?", photo));
+}
+
+function photoSheet() {
+  openSheet("Фото профиля", "Его видят староста и админы — чтобы узнать тебя в списке группы", (card, close) => {
+    const error = el("p", { class: "sheet-error", role: "alert" });
+    const choose = el("button", { class: "btn block", onclick: async () => {
+      const file = await pickImage();
+      if (!file) return;
+      choose.disabled = true;
+      error.textContent = "";
+      try {
+        const image = await squareJpeg(file);
+        const r = await api("/api/me/photo", { method: "POST", body: { image } });
+        hapticResult("success");
+        close();
+        photoChanged(r.photo);
+        toast("Фото обновлено");
+      } catch (e) { error.textContent = e.message; hapticResult("error"); }
+      finally { choose.disabled = false; }
+    } }, state.me.photo ? "Выбрать другое фото" : "Выбрать фото");
+    const remove = state.me.photo ? el("button", { class: "btn tinted block danger-text", onclick: async () => {
+      try {
+        await api("/api/me/photo", { method: "DELETE" });
+        close();
+        photoChanged(null);
+        toast("Фото убрано");
+      } catch (e) { error.textContent = e.message; }
+    } }, "Убрать фото") : null;
+    card.append(el("div", { class: "sheet-form" },
+      el("div", { class: "photo-preview" }, avatarNode(displayName(state.me), state.me.photo)), error, choose, remove));
+  });
 }
 
 const displayName = (me) => me.student?.full_name || me.teacher?.full_name || me.full_name || "";
@@ -1144,7 +1445,7 @@ function profileHero() {
         }),
         el("div", { class: "hero-note" }, "На этих парах группа делится пополам:",
           ...me.half_lessons.map((l) => el("div", {},
-            `${WD_SHORT[l.weekday]}${l.week !== "every" ? ", " + PARITY[l.week] : ""}, ${l.start} — ${l.subject}: ${l.half}-я половина`))));
+            `${WD_SHORT[l.weekday]}${l.week !== "every" ? ", " + l.week_label : ""}, ${l.start} — ${l.subject}: ${l.half}-я половина`))));
       halfPanel.querySelector(".segmented").classList.add("wide");
       const tile = el("button", { class: "hero-tile half-tile", "aria-expanded": "false", onclick: () => {
         halfPanel.hidden = !halfPanel.hidden;
@@ -1158,8 +1459,10 @@ function profileHero() {
     tiles.push(el("button", { class: "hero-tile grow half-tile wide", onclick: () => { haptic(); openTab("teacher"); } },
       el("small", {}, "мои предметы"), el("b", {}, n ? countOf(n, "предмет", "предмета", "предметов") : "не выбраны", icon("chevron"))));
   }
-  return el("section", { class: "hero profile-hero" },
-    el("div", { class: "profile-top" }, avatarNode(name),
+  return el("section", { class: "hero profile-hero" }, emblem(),
+    el("div", { class: "profile-top" },
+      el("button", { class: "avatar-btn", "aria-label": "Фото профиля", onclick: photoSheet },
+        avatarNode(name, me.photo), el("span", { class: "avatar-edit" }, icon("camera"))),
       el("div", { class: "grow" }, el("div", { class: "pname" }, name), sub ? el("div", { class: "psub" }, sub) : null)),
     tiles.length ? el("div", { class: "hero-tiles" }, ...tiles) : null,
     halfPanel);
@@ -1467,6 +1770,11 @@ async function starostaDashboard(box) {
   const studentsCard = el("section", { class: "panel list" },
     el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, "Студенты группы")),
     el("p", { class: "note list-pad" }, "Загрузка…"));
+  const changes = changesPanel(() => group);
+  const changesCard = el("section", { class: "panel pad" },
+    el("div", { class: "panel-top" }, el("span", { class: "eyebrow" }, "Разовые изменения")),
+    el("p", { class: "note" }, "Отмена, другая аудитория или время, перенос — только на один день, без повторений."),
+    changes.node);
   setChildren(box,
     pageHead("Я староста", formatGroup(group), true),
     el("section", { class: "hero" },
@@ -1475,7 +1783,7 @@ async function starostaDashboard(box) {
         class: "quick-tile", onclick: () => { haptic(); open(); },
       }, icon(ic), el("span", {}, label))))),
     groupCodeCard(group),
-    lessonsCard, studentsCard);
+    lessonsCard, changesCard, studentsCard);
 
   let lessons, students;
   try {
@@ -1485,8 +1793,8 @@ async function starostaDashboard(box) {
     setChildren(lessonsCard, el("p", { class: "note list-pad" }, e.message));
     return;
   }
-  // Сколько пар в каждый день этой недели (с учётом чётности)
-  const perDay = WEEKDAYS.map((_, i) => lessons.filter((l) => l.weekday === i && (l.week === "every" || l.week === parity)).length);
+  // Сколько пар в каждый день этой недели (с учётом чётности и своих недель)
+  const perDay = WEEKDAYS.map((_, i) => lessons.filter((l) => l.weekday === i && lessonOnWeek(l, sem.week)).length);
   const days = perDay.map((n, i) => n && listRow({
     title: WEEKDAYS[i], value: countOf(n, "пара", "пары", "пар"),
     onclick: () => openSection(lessonsBlock({ weekday: i })),
@@ -1566,7 +1874,7 @@ function addByCodeSheet(group, onDone) {
         const where = person.group ? (person.group === target ? "уже в этой группе" : `сейчас в группе ${person.group}`)
           : "пока без группы";
         setChildren(found, el("div", { class: "found-person" },
-          avatarNode(person.full_name), el("div", { class: "grow" }, el("b", {}, person.full_name),
+          avatarNode(person.full_name, person.photo), el("div", { class: "grow" }, el("b", {}, person.full_name),
             el("small", {}, [where, person.teacher && "преподаватель"].filter(Boolean).join(" · ")))));
         btn.textContent = person.group === target ? "Готово" : person.group ? "Перевести в группу" : "Добавить в группу";
       } catch (e) { error.textContent = e.message; person = null; hapticResult("error"); }
@@ -1779,7 +2087,7 @@ function lessonsBlock(opts = {}) {
       nodes.push(el("div", { class: "item" },
         el("div", { class: "grow" },
           el("div", {}, `${l.start}  ${l.subject}`),
-          el("div", { class: "sub" }, [PARITY[l.week], l.kind, l.room, l.teacher, l.half && `${l.half}-я половина`]
+          el("div", { class: "sub" }, [l.week_label, l.kind, l.room, l.teacher, l.half && `${l.half}-я половина`]
             .filter(Boolean).join(" · "))),
         el("button", { class: "icon-btn", "aria-label": "Изменить", onclick: () => openForm(l) }, icon("edit")),
         el("button", { class: "icon-btn danger", "aria-label": "Удалить", onclick: async () => {
@@ -1797,12 +2105,14 @@ function lessonsBlock(opts = {}) {
   }
 
   function openForm(lesson) {
-    const l = lesson || { group: select.value, weekday: 0, week: "every", pair_num: null, start: "", end: "",
+    const l = lesson || { group: select.value, weekday: 0, week: "every", weeks: null, pair_num: null, start: "", end: "",
       subject: "", kind: "", room: "", teacher: "", half: null };
+    const nowWeek = state.me.semester?.week || 1;
     const f = {
       weekday: el("select", {}, ...WEEKDAYS.map((d, i) => el("option", { value: i, selected: l.weekday === i }, d))),
-      week: el("select", {}, ...Object.entries(PARITY).reverse().map(([k, v]) =>
-        el("option", { value: k, selected: l.week === k }, v))),
+      week: el("select", {}, ...[["every", "каждую неделю"], ["odd", "по нечётным"], ["even", "по чётным"],
+        ["custom", "свои недели…"]].map(([k, v]) => el("option", { value: k, selected: l.week === k }, v))),
+      weeks: el("input", { value: l.weeks || "", placeholder: "1-4, 6, 9 или 2/3", autocomplete: "off" }),
       pair: el("select", {}, el("option", { value: "" }, "—"),
         ...state.config.bells.map((b, i) => el("option", { value: i + 1, selected: l.pair_num === i + 1 },
           `${i + 1} (${b.start}–${b.end})`))),
@@ -1820,10 +2130,24 @@ function lessonsBlock(opts = {}) {
       const b = state.config.bells[Number(f.pair.value) - 1];
       if (b) { f.start.value = b.start; f.end.value = b.end; }
     };
+    // Свои недели: номера через запятую, диапазоны и «раз в N недель» с текущей
+    const weeksBox = el("div", { class: "span2 weeks-box stack tight" },
+      el("span", { class: "field-label" }, "Какие недели"), f.weeks,
+      el("div", { class: "chips" }, el("span", { class: "field-hint" }, `С ${nowWeek}-й недели:`),
+        ...[2, 3, 4].map((n) => el("button", { class: "chip-btn", type: "button", onclick: () => {
+          f.weeks.value = `${nowWeek}/${n}`;
+          haptic();
+        } }, `раз в ${n} нед.`))),
+      el("span", { class: "field-hint" }, `Сейчас ${nowWeek}-я неделя. Примеры: «1-8» — первые 8 недель, «3, 7, 11», `
+        + "«2/3» — со 2-й каждую 3-ю, «1-16/2» — с 1-й по 16-ю через одну"));
+    const syncWeeks = () => { weeksBox.hidden = f.week.value !== "custom"; };
+    f.week.onchange = () => { syncWeeks(); if (f.week.value === "custom") f.weeks.focus(); };
+    syncWeeks();
     const field = (label, input, span) => el("label", { class: span ? "span2" : "" }, label, input);
     const save = el("button", { class: "btn", onclick: async () => {
       const body = {
         group: l.group, weekday: Number(f.weekday.value), week: f.week.value,
+        weeks: f.week.value === "custom" ? f.weeks.value : null,
         pair_num: f.pair.value ? Number(f.pair.value) : null,
         start: f.start.value, end: f.end.value, subject: f.subject.value,
         kind: f.kind.value, room: f.room.value, teacher: f.teacher.value,
@@ -1843,7 +2167,7 @@ function lessonsBlock(opts = {}) {
       el("datalist", { id: "kinds" }, ...KINDS.map((k) => el("option", { value: k }))),
       el("div", { class: "form-grid" },
         field("Предмет", f.subject, true),
-        field("День", f.weekday), field("Неделя", f.week),
+        field("День", f.weekday), field("Повторять", f.week), weeksBox,
         field("№ пары", f.pair), field("Тип", f.kind),
         field("Начало", f.start), field("Конец", f.end),
         field("Аудитория", f.room), field("Половина", f.half),
@@ -1853,12 +2177,16 @@ function lessonsBlock(opts = {}) {
     formBox.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  select.onchange = () => { setChildren(formBox); reload(); };
+  const changes = changesPanel(() => select.value);
+  select.onchange = () => { setChildren(formBox); reload(); changes.reload(); };
   select.hidden = state.groups.length === 1;
   return block(isAdminRole(state.me.role) ? "Пары групп" : "Пары группы", el("div", { class: "stack" },
     select,
     el("button", { class: "btn tinted", onclick: () => select.value && openForm(null) }, "Добавить пару"),
-    formBox, list), reload);
+    formBox, list,
+    el("h3", { class: "section-title" }, "Разовые изменения"),
+    el("p", { class: "note" }, "Только на один день, без повторений: отмена, другая аудитория, перенос, разовая пара."),
+    changes.node), () => { reload(); changes.reload(); });
 }
 
 function curatorBlock() {
@@ -1995,18 +2323,23 @@ function studentsBlock(opts = {}) {
     } }, s.linked ? "Убрать из группы" : "Удалить");
     const canReset = s.linked && s.user_id !== me.id && (isAdmin ? s.role !== "owner" && (isOwner || s.role !== "admin") : s.role === "user");
     const reset = canReset ? el("button", { class: "btn tinted small", onclick: () => resetPassword(s) }, "Сбросить пароль") : null;
+    const dropPhoto = s.photo && s.user_id !== me.id ? el("button", { class: "btn tinted small", onclick: async () => {
+      if (!(await confirmDialog(`Убрать фото у «${s.full_name}»? Ему придёт уведомление.`, "Убрать"))) return;
+      run(() => api(`/api/admin/users/${s.user_id}/photo`, { method: "DELETE" }), "Фото убрано");
+    } }, "Убрать фото") : null;
     const unlink = isAdmin && s.linked && s.user_id !== me.id ? el("button", { class: "btn tinted small", onclick: async () => {
       if (!(await confirmDialog(`Отвязать аккаунт от строки «${s.full_name}»? Строка в списке останется.`, "Отвязать"))) return;
       run(() => api(`/api/admin/students/${s.id}/unlink`, { method: "POST" }), "Аккаунт отвязан");
     } }, "Отвязать аккаунт") : null;
     return el("div", { class: "item-panel form stack" },
+      s.photo ? el("div", { class: "photo-preview" }, avatarNode(s.full_name, s.photo)) : null,
       s.linked ? el("p", { class: "note" }, `В приложении · личный код ${s.code}${s.login ? " · логин " + s.login : ""}`)
         : el("p", { class: "note" }, "Ещё не в приложении: строка из списка, к ней никто не привязан."),
       el("div", { class: "stack tight" }, el("span", { class: "field-label" }, "ФИО"), name),
       el("div", { class: "stack tight" }, el("span", { class: "field-label" }, "Почта"), email),
       groupSel ? el("div", { class: "stack tight" }, el("span", { class: "field-label" }, "Группа"), groupSel) : null,
       roleControl(s),
-      el("div", { class: "inline" }, save, reset, remove, unlink));
+      el("div", { class: "inline" }, save, reset, dropPhoto, remove, unlink));
   };
 
   const draw = () => {
@@ -2026,7 +2359,8 @@ function studentsBlock(opts = {}) {
         haptic();
         draw();
       } },
-        el("span", { class: "dot" + (s.linked ? " on" : "") }),
+        s.photo ? el("span", { class: "mini-avatar" }, avatarNode(s.full_name, s.photo))
+          : el("span", { class: "dot" + (s.linked ? " on" : "") }),
         el("div", { class: "grow" }, el("div", {}, s.full_name), el("div", { class: "sub" }, tag, sub)),
         el("span", { class: "chev-icon" }, icon("chevron")));
       return open ? [head, panel(s)] : [head];
@@ -2131,7 +2465,7 @@ function teamBlock() {
       });
       seg?.classList.add("wide");
       setChildren(found, el("div", { class: "form stack" },
-        el("div", { class: "found-person" }, avatarNode(p.full_name),
+        el("div", { class: "found-person" }, avatarNode(p.full_name, p.photo),
           el("div", { class: "grow" }, el("b", {}, p.full_name),
             el("small", {}, [p.group ? formatGroup(p.group) : "без группы", ROLE_LABELS[p.role], p.teacher && "преподаватель"]
               .filter(Boolean).join(" · ")))),
@@ -3120,7 +3454,7 @@ async function start() {
   // Шапка: приветствие по имени и аватарка (нажатие — в профиль)
   renderGreeting();
   const avatar = $("me-avatar");
-  setChildren(avatar, avatarNode(displayName(me) || "?"));
+  setChildren(avatar, avatarNode(displayName(me) || "?", me.photo));
   avatar.onclick = () => { haptic(); openTab("profile"); };
 
   state.groups = [];

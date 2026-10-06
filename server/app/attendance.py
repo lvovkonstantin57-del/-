@@ -23,7 +23,8 @@ from app import db, notify, schedule
 from app.security import INVITE_CODE_LEN, clean_code as clean_any_code, pretty_code, random_code
 from app.config import config
 from app.models import (
-    AttendanceGroup, AttendanceMark, AttendanceSession, Lesson, Student, Teacher, TeacherInvite, User,
+    CHANGE_ADD, CHANGE_EDIT, AttendanceGroup, AttendanceMark, AttendanceSession, Lesson, Student, Teacher,
+    TeacherInvite, User,
 )
 
 log = logging.getLogger(__name__)
@@ -200,6 +201,19 @@ async def teacher_lessons(s: AsyncSession, teacher: Teacher) -> list[Lesson]:
         return []
     lessons = (await s.scalars(select(Lesson))).all()
     return [l for l in lessons if any(same_person(me, key) for _, key in people_in(l.teacher))]
+
+
+async def teacher_user_ids(s: AsyncSession, *teacher_fields: str | None) -> list[int]:
+    """Аккаунты преподавателей, которые записаны в этих графах «Преподаватель»."""
+    keys = [key for f in teacher_fields for _, key in people_in(f)]
+    if not keys:
+        return []
+    out = []
+    for t in (await s.scalars(select(Teacher))).all():
+        me = teacher_key(t)
+        if me is not None and any(same_person(me, k) for k in keys):
+            out.append(t.user_id)
+    return out
 
 
 async def teacher_profile(s: AsyncSession, teacher: Teacher) -> dict:
@@ -655,16 +669,15 @@ def lesson_key(lesson: Lesson) -> tuple:
     return (lesson.subject, lesson.start_time, lesson.end_time, lesson.half or 0, lesson.kind)
 
 
-def teacher_day(mine: list[Lesson], d: date, semester_start: date) -> list[dict]:
-    """Пары преподавателя в этот день. Одинаковые пары разных подгрупп (общая лекция) — одной строкой."""
+def teacher_items(slots: list[schedule.Slot]) -> list[dict]:
+    """Пары преподавателя за день. Одинаковые пары разных подгрупп (общая лекция) — одной строкой."""
     merged: dict[tuple, dict] = {}
-    for l in mine:
-        if not schedule.lesson_visible(l, d, semester_start, None):
-            continue
+    for l in slots:
         item = merged.setdefault(lesson_key(l), {
             "subject": l.subject, "kind": l.kind, "room": l.room, "start": l.start_time,
             "end": l.end_time, "half": l.half or 0, "pair_num": l.pair_num, "groups": [],
-            "teacher": l.teacher,
+            "teacher": l.teacher, "status": l.status, "note": l.note, "moved": l.moved,
+            "was": schedule.LessonDTO.of(l).was,
         })
         item["groups"].append(l.group_name)
     for item in merged.values():
@@ -672,10 +685,39 @@ def teacher_day(mine: list[Lesson], d: date, semester_start: date) -> list[dict]
     return sorted(merged.values(), key=lambda l: (l["start"], l["subject"]))
 
 
+def _teaches(me: Person, teacher_field: str | None) -> bool:
+    return any(same_person(me, key) for _, key in people_in(teacher_field))
+
+
+async def teacher_days(s: AsyncSession, teacher: Teacher, dates: list[date]) -> dict[date, schedule.Day]:
+    """Пары преподавателя по дням — с отменами, заменами аудиторий и разовыми парами.
+    Замена преподавателя на один день: пара уходит к тому, кто её ведёт в этот день."""
+    me = teacher_key(teacher)
+    if me is None:
+        return {d: schedule.Day([], []) for d in dates}
+    mine = await teacher_lessons(s, teacher)
+    ids = {l.id for l in mine}
+    changes = await schedule.changes_between(s, min(dates), max(dates))
+    # Чужие пары, которые ему отдали на один день
+    sub_ids = {c.lesson_id for c in changes
+               if c.action == CHANGE_EDIT and c.lesson_id not in ids and c.teacher and _teaches(me, c.teacher)}
+    lessons = mine + (list((await s.scalars(select(Lesson).where(Lesson.id.in_(sub_ids)))).all()) if sub_ids else [])
+    relevant = [c for c in changes if c.lesson_id in ids or c.lesson_id in sub_ids
+                or (c.action == CHANGE_ADD and _teaches(me, c.teacher))]
+    start = await db.get_semester_start(s)
+    out = {}
+    for d in dates:
+        day = schedule.build_day(lessons, relevant, d, start, None)
+        out[d] = schedule.Day([l for l in day.lessons if _teaches(me, l.teacher)],
+                              [l for l in day.cancelled if _teaches(me, l.teacher)])
+    return out
+
+
 async def teacher_today(s: AsyncSession, teacher: Teacher) -> dict:
     """Пары преподавателя сегодня (где он стоит в расписании) — чтобы открыть отметку одним нажатием."""
     mine = await teacher_lessons(s, teacher)
-    lessons = teacher_day(mine, local_now().date(), await db.get_semester_start(s))
+    d = local_now().date()
+    lessons = teacher_items((await teacher_days(s, teacher, [d]))[d].lessons)
     x = await active_session(s, teacher)
     return {
         "groups": sorted({l.group_name for l in mine}),

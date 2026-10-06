@@ -12,6 +12,8 @@
   --accent-text: #ffffff;
   --hero: #2f6868;                 /* заливка «Сейчас» и выбранного дня: белый текст читается */
   --danger: #ff3b30;
+  --change: #b25e00;               /* разовое изменение: другая аудитория, перенос (контраст ≥ 4.5) */
+  --change-tint: rgba(255, 149, 0, .14);
   --sep: rgba(60, 60, 67, .16);
   --fill: rgba(118, 118, 128, .12);
   --tint: rgba(79, 174, 173, .16);
@@ -30,6 +32,8 @@
 }
 :root[data-scheme=dark] {
   --accent-ink: #6cc9c8;
+  --change: #ffb340;
+  --change-tint: rgba(255, 159, 10, .2);
   --tint: rgba(79, 174, 173, .22);
   --sep: rgba(84, 84, 88, .55);
   --fill: rgba(118, 118, 128, .24);
@@ -715,3 +719,65 @@ textarea { resize: vertical; min-height: 92px; line-height: 1.4; }
 /* Приложение на телефоне: без выделения текста и подсветки нажатий, как у нативного */
 :root.native body { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
 :root.native input, :root.native textarea, :root.native .note-body { -webkit-user-select: text; user-select: text; }
+
+/* --- разовые изменения расписания --- */
+.day.changed .dn { position: relative; }
+.day.changed .dn::after {
+  content: ""; position: absolute; left: 50%; bottom: -5px; width: 5px; height: 5px; margin-left: -2.5px;
+  border-radius: 50%; background: var(--change);
+}
+.day.active.changed .dn::after { background: #ffffff; }
+.change-note {
+  display: flex; align-items: flex-start; gap: 6px; margin-top: 10px; padding: 8px 10px; border-radius: 12px;
+  background: var(--change-tint); color: var(--change); font-size: 14px; font-weight: 600; line-height: 1.3;
+}
+.change-note .icon { width: 17px; height: 17px; flex: none; margin-top: 1px; }
+.hero-change {
+  margin-top: 8px; padding: 6px 10px; border-radius: 10px; background: rgba(255, 255, 255, .18);
+  font-size: 14px; font-weight: 600; line-height: 1.3;
+}
+.day-row { flex-wrap: wrap; }
+.day-row .r.changed { color: var(--change); font-weight: 700; }
+.day-row .row-change { flex-basis: 100%; padding-left: 56px; margin-top: -4px; color: var(--change); font-size: 13px; font-weight: 600; }
+.cancelled-card { margin-top: 10px; padding: 14px 18px; }
+.cancelled-row { display: flex; gap: 12px; padding: 8px 0 2px; color: var(--hint); }
+.cancelled-row .t { width: 44px; flex: none; font-variant-numeric: tabular-nums; text-decoration: line-through; }
+.cancelled-row .s { flex: 1; min-width: 0; }
+.cancelled-row b { font-weight: 500; text-decoration: line-through; }
+.cancelled-row small { display: block; font-size: 13px; margin-top: 2px; }
+.edit-day { display: inline-flex; align-items: center; gap: 6px; margin: 14px auto 0; }
+.edit-day .icon { width: 18px; height: 18px; }
+.lessons > .edit-day { display: flex; justify-content: center; width: 100%; }
+.change-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; padding: 10px 0; border-bottom: 1px solid var(--sep); }
+.change-row .grow { min-width: 60%; }
+.change-row b { display: block; font-weight: 600; }
+.change-row small { display: block; color: var(--hint); font-size: 13px; margin-top: 2px; }
+.change-row.muted b { color: var(--hint); text-decoration: line-through; }
+.change-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.section-title { margin: 18px 0 0; font-size: 17px; }
+.chips { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.chip-btn {
+  border: 0; padding: 6px 10px; border-radius: 12px; background: var(--fill); color: var(--text);
+  font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
+}
+.weeks-box { margin-top: -4px; }
+
+/* --- фото профиля --- */
+.avatar-btn { position: relative; flex: none; padding: 0; border: 0; background: none; border-radius: 50%; cursor: pointer; color: inherit; }
+.avatar-edit {
+  position: absolute; right: -2px; bottom: -2px; width: 24px; height: 24px; border-radius: 50%;
+  display: grid; place-items: center; background: #ffffff; color: var(--hero); box-shadow: 0 1px 4px rgba(0, 0, 0, .25);
+}
+.avatar-edit .icon { width: 15px; height: 15px; }
+.photo-preview { display: flex; justify-content: center; padding: 4px 0 8px; }
+.photo-preview .avatar { width: 120px; height: 120px; font-size: 40px; }
+.mini-avatar { flex: none; }
+.mini-avatar .avatar { width: 32px; height: 32px; font-size: 13px; }
+
+/* --- эмблема на карточке «Сейчас» --- */
+.hero { position: relative; overflow: hidden; }
+.hero > * { position: relative; }
+.hero > .hero-emblem {
+  position: absolute; right: -26px; top: -18px; width: 150px; height: 150px; background: #ffffff; opacity: .1;
+  pointer-events: none;
+}

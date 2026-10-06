@@ -56,12 +56,22 @@ def test_parse_schedule_reports_bad_rows():
 
 
 @pytest.mark.parametrize("raw,expected", [
-    ("каждая", "every"), ("", "every"), (None, "every"),
-    ("нечётная", "odd"), ("Нечетная", "odd"), ("числитель", "odd"),
-    ("чётная", "even"), ("знаменатель", "even"),
+    ("каждая", ("every", None)), ("", ("every", None)), (None, ("every", None)),
+    ("нечётная", ("odd", None)), ("Нечетная", ("odd", None)), ("числитель", ("odd", None)),
+    ("чётная", ("even", None)), ("знаменатель", ("even", None)),
+    # Свои номера недель
+    ("1-4, 6", ("custom", "1-4,6")), ("нед. 2 / 3", ("custom", "2/3")), ("1–16/2", ("custom", "1-16/2")),
+    (7, ("custom", "7")),
 ])
 def test_parse_week(raw, expected):
     assert parse_week(raw) == expected
+
+
+def test_parse_week_rejects_nonsense():
+    with pytest.raises(ImportError_):
+        parse_week("иногда")
+    with pytest.raises(ImportError_, match="от 1 до 60"):
+        parse_week("5-2")
 
 
 @pytest.mark.parametrize("raw,expected", [

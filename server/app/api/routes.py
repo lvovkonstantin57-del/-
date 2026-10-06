@@ -11,33 +11,31 @@ from fastapi import APIRouter, FastAPI, HTTPException, Query, Request, UploadFil
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import attendance, backup, db, notify, plan, roles, schedule, security, stats, users
+from app import attendance, backup, db, notify, pictures, plan, roles, schedule, security, stats, users
 from app.api import auth as auth_api
+from app.api import changes as changes_api
 from app.api import notifications as notifications_api
+from app.api import pictures as pictures_api
 from app.api import teacher as teacher_api
 from app.api.deps import AdminDep, OwnerDep, SessionDep, StaffDep, UserDep, check_group
 from app.api.files import attachment
 from app.attendance import AttendanceError
 from app.config import config
 from app.importer import ImportError_, clean_email, clean_group, import_any, name_key
-from app.models import ROLE_ADMIN, ROLE_OWNER, ROLE_STAROSTA, ROLE_USER, GroupInfo, Lesson, Student, User
+from app.models import ROLE_ADMIN, ROLE_OWNER, ROLE_STAROSTA, ROLE_USER, WEEK_CUSTOM, GroupInfo, Lesson, Student, User
 from app.users import AccountError, clean_fio
 
 log = logging.getLogger(__name__)
 
-TIME_RE = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 MAX_UPLOAD = 5 * 1024 * 1024
 WEBAPP_DIR = Path(__file__).resolve().parent.parent / "webapp"
 
 
-def _check_time(v: str | None) -> str | None:
-    if v is not None and not TIME_RE.match(v):
-        raise ValueError("время в формате ЧЧ:ММ")
-    return v
+_check_time = schedule.check_time
 
 
 class SettingsIn(BaseModel):
@@ -55,7 +53,9 @@ class SettingsIn(BaseModel):
 class LessonIn(BaseModel):
     group: str = Field(min_length=1, max_length=100)
     weekday: int = Field(ge=0, le=6)
-    week: Literal["every", "odd", "even"] = "every"
+    week: Literal["every", "odd", "even", "custom"] = "every"
+    # Для week == custom: номера недель — «1-4, 6», «2/3» (со 2-й каждую 3-ю)
+    weeks: str | None = Field(default=None, max_length=200)
     pair_num: int | None = Field(default=None, ge=1, le=12)
     start: str
     end: str
@@ -70,9 +70,22 @@ class LessonIn(BaseModel):
     def _time(cls, v):
         return _check_time(v)
 
+    @model_validator(mode="after")
+    def _weeks(self):
+        if self.week == WEEK_CUSTOM:
+            try:
+                self.weeks = schedule.format_weeks(self.weeks or "")
+            except ValueError as e:
+                raise ValueError(f"Недели: {e}") from e
+        else:
+            self.weeks = None
+        if self.start >= self.end:
+            raise ValueError("Пара должна закончиться позже, чем началась")
+        return self
+
     def apply(self, lesson: Lesson) -> Lesson:
         lesson.group_name = clean_group(self.group)
-        lesson.weekday, lesson.week, lesson.pair_num = self.weekday, self.week, self.pair_num
+        lesson.weekday, lesson.week, lesson.weeks, lesson.pair_num = self.weekday, self.week, self.weeks, self.pair_num
         lesson.start_time, lesson.end_time = self.start, self.end
         lesson.subject, lesson.kind = self.subject.strip(), self.kind.strip().lower()
         lesson.room, lesson.teacher, lesson.half = self.room.strip(), self.teacher.strip(), self.half
@@ -185,6 +198,7 @@ async def me(user: UserDep, s: SessionDep):
         "login": user.login,
         "full_name": user.full_name,
         "code": security.pretty_code(user.code),
+        "photo": pictures.url(user.photo),
         "role": user.effective_role,
         "student": (
             {"id": user.student.id, "full_name": user.student.full_name, "group": group, "email": user.student.email}
@@ -286,8 +300,10 @@ async def get_schedule(
     day: Annotated[date | None, Query(alias="date")] = None,
     group: str | None = None,
     mine: bool = False,
+    edit: bool = False,
 ):
-    """Неделя пар: своей группы, выбранной (админу) или, при mine, только пары преподавателя."""
+    """Неделя пар: своей группы, выбранной (админу) или, при mine, только пары преподавателя.
+    edit — для разовых изменений: пары обеих половин группы (старосте и админу)."""
     day = day or today()
     start = await db.get_semester_start(s)
     mon = schedule.monday(day)
@@ -301,11 +317,13 @@ async def get_schedule(
     if mine or (user.is_teacher and not group and not user.group_name):
         if not user.is_teacher:
             raise HTTPException(403, "Это расписание преподавателя")
-        lessons = await attendance.teacher_lessons(s, user.teacher)
+        by_day = await attendance.teacher_days(s, user.teacher, dates)
+        found = bool(await attendance.teacher_lessons(s, user.teacher)) or any(x.lessons for x in by_day.values())
         return {
-            "mine": True, "found": bool(lessons), "group": None, "half": None, **week,
+            "mine": True, "found": found, "group": None, "half": None, "can_edit": False, **week,
             "days": [
-                {"date": d.isoformat(), "weekday": i, "lessons": attendance.teacher_day(lessons, d, start)}
+                {"date": d.isoformat(), "weekday": i, "lessons": attendance.teacher_items(by_day[d].lessons),
+                 "cancelled": attendance.teacher_items(by_day[d].cancelled)}
                 for i, d in enumerate(dates)
             ],
         }
@@ -317,15 +335,16 @@ async def get_schedule(
         group, half = user.group_name, user.half
     if not group:
         raise HTTPException(403, "Ты ещё не в группе: покажи старосте свой личный код или введи код группы")
-    days = []
-    for i, d in enumerate(dates):
-        lessons = await schedule.lessons_on(s, group, d, half)
-        days.append({
-            "date": d.isoformat(),
-            "weekday": i,
-            "lessons": [asdict(schedule.LessonDTO.of(l)) for l in lessons],
-        })
-    return {"mine": False, "group": group, "half": half, **week, "days": days}
+    if edit and user.can_manage(group):
+        half = None
+    by_day = await schedule.group_days(s, group, dates, half)
+    days = [{
+        "date": d.isoformat(),
+        "weekday": i,
+        "lessons": [asdict(schedule.LessonDTO.of(l)) for l in by_day[d].lessons],
+        "cancelled": [asdict(schedule.LessonDTO.of(l)) for l in by_day[d].cancelled],
+    } for i, d in enumerate(dates)]
+    return {"mine": False, "group": group, "half": half, "can_edit": user.can_manage(group), **week, "days": days}
 
 
 # --- админка ---------------------------------------------------------------
@@ -388,7 +407,7 @@ async def new_group_code(body: GroupCodeIn, user: StaffDep, s: SessionDep):
 def _person(u: User) -> dict:
     return {
         "id": u.id, "full_name": u.display_name, "code": security.pretty_code(u.code),
-        "group": u.group_name, "role": u.effective_role, "teacher": u.is_teacher,
+        "group": u.group_name, "role": u.effective_role, "teacher": u.is_teacher, "photo": pictures.url(u.photo),
     }
 
 
@@ -490,21 +509,34 @@ async def put_group_info(body: GroupInfoIn, user: StaffDep, s: SessionDep):
 # --- пары ------------------------------------------------------------------
 
 def _lesson_line(l: Lesson) -> str:
-    week = "" if l.week == "every" else f", {schedule.WEEK_LABELS[l.week]} неделя"
+    week = "" if l.week == "every" else f", {schedule.week_text(l.week, l.weeks)}"
     half = f", {l.half}-я половина" if l.half else ""
-    return f"{schedule.WEEKDAYS_SHORT[l.weekday]}{week}, {l.start_time} — {l.subject}{half}"
+    room = f", {schedule.room_text(l.room)}" if l.room else ""
+    return f"{schedule.WEEKDAYS_SHORT[l.weekday]}{week}, {l.start_time}–{l.end_time} — {l.subject}{room}{half}"
 
 
-async def _schedule_changed(s: AsyncSession, actor: User, group: str, text: str) -> None:
-    await notify.push(s, await notify.group_member_ids(s, [group]), f"🗓 Изменение в расписании · {group}",
-                      f"{text}\n\n{roles.actor_label(actor)}", kind=notify.KIND_SCHEDULE, skip=[actor.id])
+LESSON_FIELDS = ("group_name", "weekday", "week", "weeks", "pair_num", "start_time", "end_time", "subject", "kind",
+                 "room", "teacher", "half")
+
+
+def _lesson_state(l: Lesson) -> dict:
+    return {f: getattr(l, f) for f in LESSON_FIELDS}
+
+
+async def _schedule_changed(s: AsyncSession, actor: User, group: str, text: str,
+                            title: str = "🗓 Изменение в расписании", half: int | None = None,
+                            teachers: tuple[str | None, ...] = ()) -> None:
+    recipients = await notify.group_member_ids(s, [group], half=half)
+    recipients += await attendance.teacher_user_ids(s, *teachers)
+    await notify.push(s, recipients, f"{title} · {group}", f"{text}\n\n{roles.actor_label(actor)}",
+                      kind=notify.KIND_SCHEDULE, skip=[actor.id])
 
 
 @api.get("/admin/lessons")
 async def list_lessons(group: str, user: StaffDep, s: SessionDep):
     check_group(user, group)
     lessons = await schedule.group_lessons(s, group)
-    lessons.sort(key=lambda l: (l.weekday, l.start_time, l.week, l.half or 0))
+    lessons.sort(key=lambda l: (l.weekday, l.start_time, l.week, l.weeks or "", l.half or 0))
     return [asdict(schedule.LessonDTO.of(l)) for l in lessons]
 
 
@@ -513,7 +545,8 @@ async def create_lesson(body: LessonIn, user: StaffDep, s: SessionDep):
     check_group(user, clean_group(body.group))
     lesson = body.apply(Lesson())
     s.add(lesson)
-    await _schedule_changed(s, user, lesson.group_name, "Новая пара: " + _lesson_line(lesson))
+    await _schedule_changed(s, user, lesson.group_name, "Новая пара: " + _lesson_line(lesson),
+                            half=lesson.half, teachers=(lesson.teacher,))
     await s.commit()
     return asdict(schedule.LessonDTO.of(lesson))
 
@@ -525,13 +558,26 @@ async def update_lesson(lesson_id: int, body: LessonIn, user: StaffDep, s: Sessi
         raise HTTPException(404, "Пара не найдена")
     check_group(user, lesson.group_name)
     check_group(user, clean_group(body.group))
-    before, old_group = _lesson_line(lesson), lesson.group_name
+    before, before_state, old_group = _lesson_line(lesson), _lesson_state(lesson), lesson.group_name
+    old_room, old_teacher, old_half = lesson.room, lesson.teacher, lesson.half
     body.apply(lesson)
-    after = _lesson_line(lesson)
-    if before != after or old_group != lesson.group_name:
-        text = f"Было: {before}\nСтало: {after}" if before != after else after
+    after_state = _lesson_state(lesson)
+    changed = {f for f in LESSON_FIELDS if before_state[f] != after_state[f]}
+    if changed:
+        if changed == {"room"}:
+            title = "🚪 Новая аудитория"
+            new_room = schedule.room_text(lesson.room) if lesson.room else "без аудитории"
+            was = f" вместо {schedule.room_text(old_room)}" if old_room else ""
+            when = "каждую неделю" if lesson.week == "every" else schedule.week_text(lesson.week, lesson.weeks)
+            text = (f"{lesson.subject} ({schedule.WEEKDAYS_SHORT[lesson.weekday]}, {lesson.start_time}): "
+                    f"теперь {new_room}{was} — {when}.")
+        else:
+            title = "🚪 Изменение в расписании" if "room" in changed else "🗓 Изменение в расписании"
+            text = f"Было: {before}\nСтало: {_lesson_line(lesson)}"
         for g in sorted({old_group, lesson.group_name}):
-            await _schedule_changed(s, user, g, text)
+            await _schedule_changed(s, user, g, text, title=title,
+                                    half=lesson.half if lesson.half == old_half else None,
+                                    teachers=(old_teacher, lesson.teacher))
     await s.commit()
     return asdict(schedule.LessonDTO.of(lesson))
 
@@ -542,7 +588,8 @@ async def delete_lesson(lesson_id: int, user: StaffDep, s: SessionDep):
     if lesson is None:
         raise HTTPException(404, "Пара не найдена")
     check_group(user, lesson.group_name)
-    await _schedule_changed(s, user, lesson.group_name, "Пары больше нет: " + _lesson_line(lesson))
+    await _schedule_changed(s, user, lesson.group_name, "Пары больше нет: " + _lesson_line(lesson),
+                            half=lesson.half, teachers=(lesson.teacher,))
     await s.delete(lesson)
     await s.commit()
     return {"ok": True}
@@ -583,6 +630,7 @@ async def list_students(user: StaffDep, s: SessionDep):
             "code": security.pretty_code(u.code) if u else None,
             "half": u.half if u else None,
             "role": u.effective_role if u else None,
+            "photo": pictures.url(u.photo) if u else None,
         }
         if user.is_admin:
             item["login"] = u.login if u else None
@@ -728,11 +776,12 @@ async def list_admins(_: AdminDep, s: SessionDep):
     return {
         "admins": [
             {"id": u.id, "full_name": u.display_name, "login": u.login, "code": security.pretty_code(u.code),
-             "role": u.role}
+             "role": u.role, "photo": pictures.url(u.photo)}
             for u in sorted(admins, key=lambda u: (u.role != ROLE_OWNER, u.display_name))
         ],
         "starostas": [
-            {"id": u.id, "full_name": u.display_name, "code": security.pretty_code(u.code), "group": u.group_name}
+            {"id": u.id, "full_name": u.display_name, "code": security.pretty_code(u.code), "group": u.group_name,
+             "photo": pictures.url(u.photo)}
             for u in starostas
         ],
     }
@@ -784,6 +833,8 @@ def create_app() -> FastAPI:
     app.include_router(auth_api.api)
     app.include_router(notifications_api.api)
     app.include_router(api)
+    app.include_router(changes_api.api)
+    app.include_router(pictures_api.api)
     app.include_router(teacher_api.api)
 
     @app.exception_handler(AttendanceError)

@@ -35,7 +35,10 @@ def setup(db_url: str | None = None) -> None:
 
 # Колонки, которые появятся после первого запуска. create_all создаёт только новые
 # таблицы, а в существующие колонки не добавляет — делаем это сами.
-ADDED_COLUMNS: dict[str, dict[str, str]] = {}
+ADDED_COLUMNS: dict[str, dict[str, str]] = {
+    "lessons": {"weeks": "VARCHAR(200)"},
+    "users": {"photo": "VARCHAR(40)"},
+}
 
 
 def _check_not_legacy(conn) -> None:

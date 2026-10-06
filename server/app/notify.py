@@ -3,7 +3,7 @@
 
 from collections.abc import Iterable
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import ROLE_ADMIN, ROLE_OWNER, ROLE_STAROSTA, Notification, Student, User
@@ -42,13 +42,15 @@ async def push(
     return count
 
 
-async def group_member_ids(s: AsyncSession, groups: Iterable[str]) -> list[int]:
+async def group_member_ids(s: AsyncSession, groups: Iterable[str], half: int | None = None) -> list[int]:
+    """Студенты групп. half — только эта половина группы (и те, кто половину не выбрал)."""
     groups = list(groups)
     if not groups:
         return []
-    return list((await s.scalars(
-        select(User.id).join(Student, User.student_id == Student.id).where(Student.group_name.in_(groups))
-    )).all())
+    q = select(User.id).join(Student, User.student_id == Student.id).where(Student.group_name.in_(groups))
+    if half:
+        q = q.where(or_(User.half.is_(None), User.half == half))
+    return list((await s.scalars(q)).all())
 
 
 async def starosta_ids(s: AsyncSession, group: str) -> list[int]:

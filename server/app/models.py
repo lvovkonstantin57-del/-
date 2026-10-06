@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Date, DateTime, ForeignKey, Integer, LargeBinary, String, Text, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 ROLE_USER = "user"
@@ -11,6 +11,11 @@ ROLE_OWNER = "owner"  # главный админ
 WEEK_EVERY = "every"
 WEEK_ODD = "odd"
 WEEK_EVEN = "even"
+WEEK_CUSTOM = "custom"  # свои номера недель — в Lesson.weeks
+
+CHANGE_CANCEL = "cancel"  # пары в этот день не будет
+CHANGE_EDIT = "change"    # в этот день другая аудитория, время, преподаватель…
+CHANGE_ADD = "add"        # разовая пара (и вторая половина переноса)
 
 
 class Base(DeclarativeBase):
@@ -66,6 +71,8 @@ class User(Base):
     digest_time: Mapped[str | None] = mapped_column(String(5))
     # Сводка на "today" или "tomorrow"
     digest_day: Mapped[str] = mapped_column(String(10), default="tomorrow")
+    # Фото профиля: ключ картинки в Picture, он же часть адреса /api/pictures/<ключ>
+    photo: Mapped[str | None] = mapped_column(String(40))
     created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
     student: Mapped[Student | None] = relationship(lazy="joined")
@@ -157,6 +164,46 @@ class Lesson(Base):
     teacher: Mapped[str] = mapped_column(String(200), default="")
     # Только для 1-й или 2-й половины группы; None — для всех
     half: Mapped[int | None] = mapped_column(Integer)
+    # Для week == custom — номера учебных недель: «1-4,6», «2/3» (со 2-й каждую 3-ю), «1-16/2»
+    weeks: Mapped[str | None] = mapped_column(String(200))
+
+
+class LessonChange(Base):
+    """Разовое изменение расписания на одну дату: отмена, другая аудитория или время, разовая пара.
+    Перенос — пара записей: отмена в старый день и разовая пара в новый, связанные через moved_id."""
+
+    __tablename__ = "lesson_changes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    group_name: Mapped[str] = mapped_column(String(100), index=True)
+    date: Mapped[date] = mapped_column(Date, index=True)
+    # Какая пара из расписания (для cancel и change); у разовой пары — None
+    lesson_id: Mapped[int | None] = mapped_column(ForeignKey("lessons.id", ondelete="CASCADE"), index=True)
+    action: Mapped[str] = mapped_column(String(8))
+    # Новые значения; у change None — «как обычно»
+    pair_num: Mapped[int | None] = mapped_column(Integer)
+    start_time: Mapped[str | None] = mapped_column(String(5))
+    end_time: Mapped[str | None] = mapped_column(String(5))
+    subject: Mapped[str | None] = mapped_column(String(300))
+    kind: Mapped[str | None] = mapped_column(String(50))
+    room: Mapped[str | None] = mapped_column(String(100))
+    teacher: Mapped[str | None] = mapped_column(String(200))
+    half: Mapped[int | None] = mapped_column(Integer)
+    note: Mapped[str] = mapped_column(String(300), default="")
+    moved_id: Mapped[int | None] = mapped_column(Integer)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
+
+
+class Picture(Base):
+    """Картинка: фото профиля или эмблема. Отдаётся по случайному ключу — его не угадать."""
+
+    __tablename__ = "pictures"
+
+    key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    mime: Mapped[str] = mapped_column(String(32))
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime, server_default=func.now())
 
 
 class Setting(Base):

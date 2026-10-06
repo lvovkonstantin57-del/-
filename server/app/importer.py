@@ -9,8 +9,8 @@ from openpyxl import load_workbook
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import db, notify
-from app.models import WEEK_EVEN, WEEK_EVERY, WEEK_ODD, Lesson, Student, User
+from app import changes, db, notify, schedule
+from app.models import WEEK_CUSTOM, WEEK_EVEN, WEEK_EVERY, WEEK_ODD, Lesson, LessonChange, Student, User
 
 KIND_SCHEDULE = "schedule"
 KIND_STUDENTS = "students"
@@ -82,15 +82,21 @@ def parse_day(value) -> int:
     return DAYS[key]
 
 
-def parse_week(value) -> str:
+def parse_week(value) -> tuple[str, str | None]:
+    """(week, weeks): «каждая» / «нечётная» / «чётная» или свои номера недель — «1-4, 6», «2/3»."""
     v = _cell_str(value).lower().replace("ё", "е")
     if not v or v.startswith("кажд") or v in ("все", "обе", "-"):
-        return WEEK_EVERY
+        return WEEK_EVERY, None
     if v.startswith("нечет") or v.startswith("числ"):
-        return WEEK_ODD
+        return WEEK_ODD, None
     if v.startswith("чет") or v.startswith("знам"):
-        return WEEK_EVEN
-    raise ImportError_(f"не понял неделю «{value}» (нужно: каждая / нечётная / чётная)")
+        return WEEK_EVEN, None
+    if any(ch.isdigit() for ch in v):
+        try:
+            return WEEK_CUSTOM, schedule.format_weeks(v)
+        except ValueError as e:
+            raise ImportError_(f"неделя «{value}»: {e}") from e
+    raise ImportError_(f"не понял неделю «{value}» (нужно: каждая / нечётная / чётная или номера недель: 1-4, 6)")
 
 
 def parse_time(value) -> str | None:
@@ -210,7 +216,7 @@ def parse_schedule(data: bytes, bells: list[tuple[str, str]]) -> ParsedSchedule:
                 dict(
                     group_name=group,
                     weekday=parse_day(get(row, "day")),
-                    week=parse_week(get(row, "week")),
+                    **dict(zip(("week", "weeks"), parse_week(get(row, "week")))),
                     pair_num=pair_num,
                     start_time=start,
                     end_time=end,
@@ -257,6 +263,52 @@ def parse_students(data: bytes) -> tuple[list[tuple[str, str, str | None]], list
 
 # --- запись в БД -----------------------------------------------------------
 
+def _diff_key(l: Lesson) -> tuple:
+    return (l.weekday, l.week, l.weeks or "", l.start_time, l.subject, l.half or 0)
+
+
+def _diff_line(l: Lesson) -> str:
+    week = "" if l.week == WEEK_EVERY else f" ({schedule.week_text(l.week, l.weeks)})"
+    half = f", {l.half}-я половина" if l.half else ""
+    return f"{schedule.WEEKDAYS_SHORT[l.weekday]} {l.start_time} {l.subject}{half}{week}"
+
+
+def schedule_diff(old: list[Lesson], new: list[Lesson]) -> tuple[str, str] | None:
+    """Что поменялось в расписании группы: (заголовок, текст); None — ничего.
+    Смену аудиторий перечисляем отдельно — о ней важно узнать заранее."""
+    before = {_diff_key(l): l for l in old}
+    after = {_diff_key(l): l for l in new}
+    rooms, other = [], []
+    for key, l in after.items():
+        was = before.get(key)
+        if was is None:
+            continue
+        if was.room != l.room:
+            rooms.append(f"• {_diff_line(l)}: {schedule.room_text(was.room) if was.room else '—'} → "
+                         f"{schedule.room_text(l.room) if l.room else '—'}")
+        if (was.end_time, was.teacher, was.kind, was.pair_num) != (l.end_time, l.teacher, l.kind, l.pair_num):
+            other.append(key)
+    added = [k for k in after if k not in before]
+    removed = [k for k in before if k not in after]
+    if not rooms and not other and not added and not removed:
+        return None
+    lines = []
+    if rooms:
+        lines.append("🚪 Другие аудитории:")
+        lines += rooms[:8] + ([f"…и ещё {len(rooms) - 8}"] if len(rooms) > 8 else [])
+    counts = []
+    if added:
+        counts.append(f"новых пар: {len(added)}")
+    if removed:
+        counts.append(f"убрано: {len(removed)}")
+    if other:
+        counts.append(f"изменено: {len(other)}")
+    if counts:
+        lines.append("Ещё: " + ", ".join(counts) + ". Загляни во вкладку «Расписание».")
+    only_rooms = rooms and not other and not added and not removed
+    return ("🚪 Новые аудитории" if only_rooms else "🗓 Расписание обновлено"), "\n".join(lines)
+
+
 async def import_schedule(s: AsyncSession, data: bytes) -> str:
     parsed = parse_schedule(data, await db.get_bells(s))
     if not parsed.lessons:
@@ -264,11 +316,33 @@ async def import_schedule(s: AsyncSession, data: bytes) -> str:
     groups: dict[str, int] = {}
     for row in parsed.lessons:
         groups[row["group_name"]] = groups.get(row["group_name"], 0) + 1
+    old_lessons = list((await s.scalars(select(Lesson).where(Lesson.group_name.in_(groups)))).all())
+    # Разовые изменения ссылаются на старые пары — отвязываем, чтобы не удалились вместе с ними
+    old_key = {l.id: changes.lesson_identity(l) for l in old_lessons}
+    kept = list((await s.scalars(select(LessonChange).where(LessonChange.lesson_id.in_(old_key)))).all())
+    kept_key = {c.id: old_key[c.lesson_id] for c in kept}
+    for c in kept:
+        c.lesson_id = None
+    await s.flush()
     await s.execute(delete(Lesson).where(Lesson.group_name.in_(groups)))
-    s.add_all(Lesson(**row) for row in parsed.lessons)
+    new_lessons = [Lesson(**row) for row in parsed.lessons]
+    s.add_all(new_lessons)
+    await s.flush()
+    new_id = {changes.lesson_identity(l): l.id for l in new_lessons}
+    for c in kept:
+        c.lesson_id = new_id.get(kept_key[c.id])
+        if c.lesson_id is None:  # такой пары в новом расписании нет — и менять нечего
+            if c.moved_id and (pair := await s.get(LessonChange, c.moved_id)) is not None:
+                pair.moved_id = None
+            await s.delete(c)
     for group in groups:
-        await notify.push(s, await notify.group_member_ids(s, [group]), "🗓 Расписание обновлено",
-                          f"Админ загрузил новое расписание группы {group}. Загляни во вкладку «Расписание».",
+        text = schedule_diff([l for l in old_lessons if l.group_name == group],
+                             [l for l in new_lessons if l.group_name == group])
+        if text is None:
+            continue  # расписание группы не изменилось — не беспокоим
+        title, body = text
+        await notify.push(s, await notify.group_member_ids(s, [group]), f"{title} · {group}",
+                          f"Админ загрузил новое расписание группы {group}.\n{body}",
                           kind=notify.KIND_SCHEDULE)
     await s.commit()
     lines = [f"Расписание загружено: {len(parsed.lessons)} пар, групп — {len(groups)}"]
