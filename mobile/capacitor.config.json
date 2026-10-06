@@ -1,0 +1,37 @@
+{
+  "appId": "ru.mpgu.schedule",
+  "appName": "Расписание МПГУ",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": false
+  },
+  "ios": {
+    "contentInset": "never"
+  },
+  "plugins": {
+    "SystemBars": {
+      "insetsHandling": "css",
+      "initialViewportFitValueHint": "cover",
+      "style": "DEFAULT"
+    },
+    "SplashScreen": {
+      "launchShowDuration": 2500,
+      "launchAutoHide": true,
+      "backgroundColor": "#2f6868",
+      "showSpinner": false,
+      "androidScaleType": "CENTER_CROP"
+    },
+    "LocalNotifications": {
+      "smallIcon": "ic_stat_notify",
+      "iconColor": "#2f6868"
+    },
+    "BackgroundRunner": {
+      "label": "ru.mpgu.schedule.check",
+      "src": "runners/background.js",
+      "event": "check",
+      "repeat": true,
+      "interval": 15,
+      "autoStart": true
+    }
+  }
+}

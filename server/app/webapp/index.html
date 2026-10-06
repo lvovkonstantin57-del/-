@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+  <title>Расписание МПГУ</title>
+  <!-- PWA: установка на экран «Домой» -->
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="МПГУ">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="theme-color" content="#f2f2f7" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <section id="screen-message" class="screen message" hidden></section>
+
+    <section id="screen-login" class="screen login" hidden>
+      <span class="logo login-logo" role="img" aria-label="МПГУ"></span>
+      <h1 id="login-title">Расписание МПГУ</h1>
+      <p class="login-text">Пары, напоминания, объявления старосты и отметка на паре — в одном приложении.</p>
+      <div id="login-body"></div>
+      <div id="install-hint"></div>
+    </section>
+
+    <section id="screen-welcome" class="screen" hidden>
+      <div id="welcome-body" class="stackv"></div>
+    </section>
+
+    <section id="screen-schedule" class="screen" hidden>
+      <header class="hello">
+        <div class="hello-text">
+          <h1 id="greeting"></h1>
+          <div class="hello-sub" id="today-line"></div>
+          <div class="hello-row">
+            <div class="group-name" id="group-name"></div>
+            <label class="group-pick" id="group-pick" hidden>
+              <select id="schedule-group" class="group-select" aria-label="Группа"></select>
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </label>
+            <button class="pill-btn" id="go-today" hidden>Сегодня</button>
+          </div>
+        </div>
+        <button class="me-avatar" id="me-avatar" aria-label="Профиль"></button>
+      </header>
+
+      <div class="week-strip">
+        <button class="chev" id="week-prev" aria-label="Предыдущая неделя">
+          <svg class="icon" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6"/></svg>
+        </button>
+        <div class="days" id="days"></div>
+        <button class="chev" id="week-next" aria-label="Следующая неделя">
+          <svg class="icon" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+      </div>
+
+      <div id="lessons" class="lessons"></div>
+    </section>
+
+    <section id="screen-code" class="screen" hidden>
+      <div id="code-body" class="stackv"></div>
+    </section>
+
+    <section id="screen-teacher" class="screen" hidden>
+      <div id="teacher-body" class="stackv"></div>
+    </section>
+
+    <section id="screen-notifications" class="screen" hidden>
+      <header class="page-head">
+        <h1>Уведомления</h1>
+        <div class="page-sub">Сообщения от старосты и админов, напоминания о парах</div>
+      </header>
+      <div id="notifications-body" class="stackv"></div>
+    </section>
+
+    <section id="screen-profile" class="screen" hidden>
+      <header class="page-head"><h1>Профиль</h1></header>
+      <div id="profile-body" class="stackv"></div>
+    </section>
+
+    <section id="screen-admin" class="screen" hidden>
+      <div id="admin-body" class="stackv"></div>
+    </section>
+  </main>
+
+  <!-- Таббар: «жидкое стекло» -->
+  <div class="tabbar-wrap" id="tabs" hidden>
+  <nav class="tabbar glass" id="tabbar">
+    <span class="tab-indicator" id="tab-indicator"></span>
+    <button data-tab="schedule" class="active">
+      <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4.5" width="18" height="17" rx="4"/><path d="M8 2.5v4M16 2.5v4M3 10h18"/></svg>
+      <span>Расписание</span>
+    </button>
+    <button data-tab="code" id="tab-code" hidden>
+      <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="4"/><path d="M7.5 12h.01M10.5 12h.01M13.5 12h.01M16.5 12h.01"/></svg>
+      <span>Код</span>
+    </button>
+    <button data-tab="teacher" id="tab-teacher" hidden>
+      <svg class="icon" viewBox="0 0 24 24"><path d="m2 9.5 10-5 10 5-10 5z"/><path d="M6 11.5V16c0 1.4 2.7 3 6 3s6-1.6 6-3v-4.5"/><path d="M22 9.5V15"/></svg>
+      <span>Я учитель</span>
+    </button>
+    <button data-tab="notifications" id="tab-notifications">
+      <span class="tab-icon">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M6 8.5a6 6 0 0 1 12 0c0 6.5 2.5 8.5 2.5 8.5h-17S6 15 6 8.5"/><path d="M10.2 20.5a2 2 0 0 0 3.6 0"/></svg>
+        <span class="tab-badge" id="tab-badge" hidden></span>
+      </span>
+      <span>Уведомления</span>
+    </button>
+    <button data-tab="profile">
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4.5 21a7.5 7.5 0 0 1 15 0"/></svg>
+      <span>Профиль</span>
+    </button>
+    <button data-tab="admin" id="tab-admin" hidden>
+      <svg class="icon" viewBox="0 0 24 24"><path d="M12 21.5s7.5-3.6 7.5-9.6V5.3L12 2.5 4.5 5.3v6.6c0 6 7.5 9.6 7.5 9.6z"/><path d="m9 12 2 2 4-4"/></svg>
+      <span id="tab-admin-label">Я админ</span>
+    </button>
+  </nav>
+  </div>
+
+  <!-- Фильтр преломления для «жидкого стекла» (работает в Chromium: Android, браузеры на ПК) -->
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <filter id="lg-refract" x="0" y="0" width="100%" height="100%" color-interpolation-filters="sRGB">
+      <feImage id="lg-map" x="0" y="0" width="1" height="1" preserveAspectRatio="none" result="map"/>
+      <feDisplacementMap in="SourceGraphic" in2="map" scale="28" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+  </svg>
+
+  <div class="toast glass" id="toast" hidden></div>
+  <script src="app.js"></script>
+</body>
+</html>

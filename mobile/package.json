@@ -1,0 +1,34 @@
+{
+  "name": "mpgu-schedule-app",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Приложение «Расписание МПГУ» для Android и iOS (Capacitor)",
+  "scripts": {
+    "build": "node scripts/build-web.mjs",
+    "sync": "npm run build && cap sync",
+    "android": "npm run sync && cap open android",
+    "ios": "npm run sync && cap open ios",
+    "assets": "capacitor-assets generate --android --ios"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.2",
+    "@capacitor/app": "^8.1.2",
+    "@capacitor/background-runner": "^3.0.0",
+    "@capacitor/browser": "^8.0.5",
+    "@capacitor/clipboard": "^8.0.0",
+    "@capacitor/core": "^8.5.2",
+    "@capacitor/dialog": "^8.0.0",
+    "@capacitor/filesystem": "^8.1.4",
+    "@capacitor/haptics": "^8.0.2",
+    "@capacitor/ios": "^8.5.2",
+    "@capacitor/local-notifications": "^8.3.1",
+    "@capacitor/preferences": "^8.0.1",
+    "@capacitor/share": "^8.0.3",
+    "@capacitor/splash-screen": "^8.0.2"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.5.2",
+    "esbuild": "^0.28.2"
+  }
+}

@@ -1,0 +1,7 @@
+fastapi>=0.142
+uvicorn[standard]>=0.54
+SQLAlchemy[asyncio]>=2.0
+aiosqlite>=0.22
+openpyxl>=3.1
+python-multipart>=0.0.32
+tzdata
