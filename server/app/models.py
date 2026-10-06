@@ -250,7 +250,7 @@ class TeacherInvite(Base):
 
 
 class AttendanceSession(Base):
-    """Отметка на одной паре: преподаватель показывает код, студенты вводят его в приложении.
+    """Отметка на одной паре: преподаватель или староста показывает код, студенты вводят его в приложении.
 
     Код живёт минуту; «Новый код» заменяет его, отметки остаются в той же паре.
     Время — в UTC без часового пояса.
@@ -272,6 +272,9 @@ class AttendanceSession(Base):
     code_expires_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime)
     closed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # Кто открыл отметку, если не преподаватель: староста или админ ведёт журнал группы сам.
+    # Такую пару староста может править; пары преподавателя — только смотреть.
+    opened_by: Mapped[int | None] = mapped_column(Integer)
 
     groups: Mapped[list["AttendanceGroup"]] = relationship(
         lazy="selectin", cascade="all, delete-orphan", order_by="AttendanceGroup.group_name"
@@ -295,7 +298,7 @@ class AttendanceGroup(Base):
 
 
 class AttendanceMark(Base):
-    """Студент был на паре: ввёл код или его отметил преподаватель."""
+    """Студент был на паре: ввёл код или его отметили вручную (преподаватель или староста)."""
 
     __tablename__ = "attendance_marks"
 

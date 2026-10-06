@@ -781,3 +781,38 @@ textarea { resize: vertical; min-height: 92px; line-height: 1.4; }
   position: absolute; right: -26px; top: -18px; width: 150px; height: 150px; background: #ffffff; opacity: .1;
   pointer-events: none;
 }
+
+/* --- посещаемость: отметки на парах и журнал группы --- */
+.att-line {
+  display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 10px; padding: 9px 10px; border-radius: 12px;
+  background: var(--tint); color: var(--accent-ink); font-size: 14px; font-weight: 600; line-height: 1.3; text-align: left;
+}
+.att-line > .icon { width: 18px; height: 18px; flex: none; stroke-width: 2; }
+.att-line > span:not(.chev-icon) { flex: 1; min-width: 0; }
+.att-line em { font-style: normal; color: var(--change); }
+.att-line .chev-icon { color: inherit; opacity: .7; }
+.att-line.todo { background: var(--fill); color: var(--text); }
+.att-line.no { background: var(--fill); color: var(--hint); }
+.att-line.on-hero { background: rgba(255, 255, 255, .16); color: #ffffff; }
+.att-line.on-hero em { color: inherit; opacity: .85; }
+.att-line.compact { flex: 1 0 calc(100% - 56px); width: auto; margin: -2px 0 2px 56px; padding: 5px 8px; font-size: 13px; text-decoration: none; }
+.att-line.compact > .icon { width: 16px; height: 16px; }
+button.att-line:active { transform: scale(.98); }
+.sheet-backdrop { overflow-y: auto; padding-bottom: 24px; }
+.att-sheet { margin-top: 14px; }
+.att-sheet > * + * { margin-top: 10px; }
+.att-sheet .big-line { margin-top: 0; }
+.att-sheet .panel.list { padding: 0; background: none; border-radius: 0; }
+.att-sheet .panel.list .panel-top.pad { padding-left: 0; padding-right: 0; }
+.att-sheet .btn .icon { width: 18px; height: 18px; margin-right: 6px; vertical-align: -3px; }
+.att-code { padding: 14px; border-radius: 18px; background: var(--fill); }
+.att-code .progress { margin-top: 10px; }
+.att-code-actions { display: flex; justify-content: center; gap: 8px; margin-top: 10px; }
+.code-digits.light { margin: 0; }
+.code-digits.light span { width: 56px; height: 72px; font-size: 44px; background: var(--card); color: var(--text); }
+.code-digits.light.expired span { opacity: .35; }
+.att-remove { display: block; margin: 16px auto 0; color: var(--danger); }
+.mark-btn.static { cursor: default; }
+.mark-btn.static:not(.on) .icon { opacity: .6; }
+.roster-row.as-btn { width: 100%; text-align: left; color: inherit; }
+.roster-row.as-btn:active { opacity: .6; }

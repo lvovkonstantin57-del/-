@@ -546,7 +546,8 @@ function heroCard(l, mode, now) {
     changeText(l) ? el("div", { class: "hero-change" }, changeText(l)) : null,
     tiles.length ? el("div", { class: "hero-tiles" }, ...tiles) : null,
     foot,
-    heroAction(l));
+    heroAction(l),
+    attendanceLine(l, state.week.today, true));
 }
 
 function nextCard(l, now) {
@@ -579,7 +580,8 @@ function dayList(lessons, now) {
       el("span", { class: "s" }, l.subject, halfNote(l) ? el("span", { class: "half" }, ` · ${halfNote(l)}`) : null,
         state.week.mine ? el("span", { class: "half" }, ` · ${whoText(l)}`) : null),
       el("span", { class: "r" + (l.was && "room" in l.was ? " changed" : "") }, l.room || ""),
-      l.status ? el("span", { class: "row-change" }, changeText(l)) : null);
+      l.status ? el("span", { class: "row-change" }, changeText(l)) : null,
+      current ? null : attendanceLine(l, state.week.today, false, true));
   }));
 }
 
@@ -624,7 +626,8 @@ function dayCards(day) {
         el("b", {}, `${l.start}–${l.end}`), l.pair_num ? el("span", {}, `${l.pair_num} пара`) : null),
       el("div", { class: "lc-subject" }, l.subject),
       meta.length ? el("div", { class: "lc-meta" }, ...meta.flatMap((m, i) => (i ? [el("span", { class: "sep" }), m] : [m]))) : null,
-      changeBadge(l)));
+      changeBadge(l),
+      attendanceLine(l, day.date)));
   });
   return nodes;
 }
@@ -1156,7 +1159,7 @@ function noteRow(n) {
 }
 
 // Шторка снизу с полем ввода: ответ на сообщение, объявление, код
-function openSheet(title, sub, build) {
+function openSheet(title, sub, build, onclose) {
   haptic("light");
   const closeBtn = el("button", { class: "sheet-close", "aria-label": "Закрыть", onclick: () => close() }, icon("close"));
   const card = el("div", { class: "sheet", role: "dialog", "aria-modal": "true" },
@@ -1167,6 +1170,7 @@ function openSheet(title, sub, build) {
     backdrop.remove();
     document.removeEventListener("keydown", onKey);
     setBackButton(null);
+    onclose?.();
   }
   build(card, close);
   document.body.append(backdrop);
@@ -1743,6 +1747,7 @@ function adminDashboard(box, st) {
     ["bell", "Объявление", "сообщение группам", announceBlock],
     ["clock", "Семестр и ЛК", "звонки, сессия, ссылка", configBlock],
     ["user", "Кураторы", "контакт для каждой группы", curatorBlock],
+    ["checkCircle", "Посещаемость", "журнал групп, Excel", () => attendanceBlock()],
     ["shield", "Команда", `${countOf(st.admins, "админ", "админа", "админов")} · ${countOf(st.teachers, "преподаватель", "преподавателя", "преподавателей")}`, teamBlock],
   ];
   setChildren(box,
@@ -1783,6 +1788,7 @@ async function starostaDashboard(box) {
         class: "quick-tile", onclick: () => { haptic(); open(); },
       }, icon(ic), el("span", {}, label))))),
     groupCodeCard(group),
+    attendanceCard(group),
     lessonsCard, changesCard, studentsCard);
 
   let lessons, students;
@@ -2515,19 +2521,23 @@ const shortDate = (iso) => { const d = parseDate(iso); return `${d.getDate()} ${
 const loadingNote = () => el("p", { class: "note pad-note" }, "Загрузка…");
 const errorNote = (e) => el("p", { class: "note pad-note" }, e.message);
 
-// Кто отметился и кого нет: в живом списке и в журнале. Кружок справа — отметить вручную
-function rosterCards(d, onToggle) {
+// Кто отметился и кого нет: в живом списке и в журнале. Кружок справа — отметить вручную;
+// без onToggle — только посмотреть (староста на паре, где отметку ведёт преподаватель)
+function rosterCards(d, onToggle, hint = "Нажмите на кружок, чтобы отметить студента вручную — например, если у него сел телефон.") {
   const multi = d.groups.length > 1;
   const row = (st) => {
     const sub = [multi && shortGroup(st.group),
       st.present ? (st.method === "manual" ? "вручную" : `в ${st.at}`) : !st.in_app && "нет в приложении"].filter(Boolean).join(" · ");
-    return el("div", { class: "roster-row" },
-      el("span", { class: "grow" }, el("b", {}, st.full_name), sub ? el("small", {}, sub) : null),
-      el("button", {
+    const mark = onToggle
+      ? el("button", {
         class: "mark-btn" + (st.present ? " on" : ""), "aria-pressed": String(st.present),
         "aria-label": (st.present ? "Убрать отметку: " : "Отметить вручную: ") + st.full_name,
         onclick: (e) => { e.currentTarget.disabled = true; onToggle(st, !st.present); },
-      }, icon("tick")));
+      }, icon("tick"))
+      : el("span", { class: "mark-btn static" + (st.present ? " on" : ""), "aria-label": st.present ? "был" : "не было" },
+        icon(st.present ? "tick" : "close"));
+    return el("div", { class: "roster-row" },
+      el("span", { class: "grow" }, el("b", {}, st.full_name), sub ? el("small", {}, sub) : null), mark);
   };
   const here = d.roster.filter((s) => s.present);
   const away = d.roster.filter((s) => !s.present);
@@ -2539,8 +2549,260 @@ function rosterCards(d, onToggle) {
         : [el("p", { class: "note list-pad" }, d.open ? "Пока никого — покажите код студентам." : "Никто не отметился.")])),
     away.length ? el("section", { class: "panel list" }, head(d.open ? "Ещё нет" : "Не было", away.length, true),
       ...away.map(row),
-      el("p", { class: "note list-pad" }, "Нажмите на кружок, чтобы отметить студента вручную — например, если у него сел телефон.")) : null,
+      onToggle && hint ? el("p", { class: "note list-pad" }, hint) : null) : null,
   ];
+}
+
+// --- посещаемость группы: отметки на парах в расписании и журнал старосты ---------------
+
+// Под начавшейся парой: старосте — кто отметился (нажать — список), студенту — есть ли его отметка
+function attendanceLine(l, iso, onHero = false, compact = false) {
+  const a = l.attendance;
+  if (!a) return null;
+  const cls = "att-line" + (onHero ? " on-hero" : "") + (compact ? " compact" : "");
+  const chev = el("span", { class: "chev-icon" }, icon("chevron"));
+  if (a.teacher) {
+    return el("button", { class: cls, onclick: () => openTeacherSession(a, l) },
+      icon("users"), el("span", {}, `Отметились ${a.present} из ${a.total}`, a.open ? el("em", {}, " · идёт отметка") : null), chev);
+  }
+  if (a.staff) {
+    const text = a.session
+      ? [`Отметились ${a.present} из ${a.total}`, a.open && el("em", {}, " · идёт отметка")]
+      : ["Отметить, кто был"];
+    return el("button", { class: cls + (a.session ? "" : " todo"), onclick: () => attendanceSheet(state.week.group, iso, l) },
+      icon(a.session ? "users" : "checkCircle"), el("span", {}, ...text.filter(Boolean)), chev);
+  }
+  return el("div", { class: cls + (a.marked ? " yes" : " no") },
+    icon(a.marked ? "checkCircle" : "close"), el("span", {}, a.marked ? `Отметка есть · ${a.at}` : "Отметки нет"));
+}
+
+// Преподаватель из своего расписания: идущая отметка — на «Код», прошедшая — в журнал
+function openTeacherSession(a, l) {
+  haptic();
+  if (a.open) { openTab("code"); return; }
+  state.teacherNext = teacherSessionBlock({ id: a.session, subject: l.subject });
+  openTab("teacher");
+}
+
+// Кто был на паре: отметить вручную, показать код или посмотреть отметку преподавателя.
+// lesson — {subject, start, end}; sessionId — если отметка уже есть
+function attendanceSheet(group, iso, lesson, { sessionId = lesson.attendance?.session, onchange } = {}) {
+  let changed = false;
+  let poll = null, tick = null;
+  const stop = () => { clearTimeout(poll); clearInterval(tick); poll = tick = null; };
+  openSheet(lesson.subject, `${longDate(iso)} · ${lesson.start}${lesson.end ? "–" + lesson.end : ""}`, (card, close) => {
+    const body = el("div", { class: "att-sheet" }, loadingNote());
+    const error = el("p", { class: "sheet-error", role: "alert" });
+    card.append(body);
+    let d = null;
+    let deadline = 0;
+    const isToday = iso === state.me.today;
+
+    async function call(path, opts, btn) {
+      if (btn) btn.disabled = true;
+      error.textContent = "";
+      try {
+        const r = await api(path, opts);
+        changed = true;
+        return r;
+      } catch (e) {
+        error.textContent = e.message;
+        hapticResult("error");
+        return null;
+      } finally { if (btn) btn.disabled = false; }
+    }
+    async function start(withCode, btn) {
+      const r = await call("/api/admin/attendance", { method: "POST", body: {
+        group, date: iso, start: lesson.start, subject: lesson.subject, code: withCode } }, btn);
+      if (r) { hapticResult("success"); show(r); }
+    }
+
+    // Отметки ещё нет: код студентам или вручную
+    function empty() {
+      const codeBtn = isToday ? el("button", { class: "btn block", onclick: (e) => start(true, e.currentTarget) },
+        icon("hash"), "Показать код студентам") : null;
+      const handBtn = el("button", { class: "btn block" + (isToday ? " tinted" : ""), onclick: (e) => start(false, e.currentTarget) },
+        icon("users"), "Отметить вручную");
+      setChildren(body,
+        el("p", { class: "note" }, isToday
+          ? "Отметки на этой паре ещё нет. Покажи студентам код — они отметятся сами в приложении. Или отметь вручную, кто был."
+          : "Отметки на этой паре не было. Отметь вручную, кто был, — пара попадёт в журнал посещаемости группы."),
+        error, codeBtn, handBtn);
+    }
+
+    // Код крупно с обратным отсчётом — пока староста показывает его группе
+    const digits = el("div", { class: "code-digits light", role: "status" });
+    const left = el("span", { class: "code-left" });
+    const fill = el("div", { class: "fill" });
+    function drawCode() {
+      const ms = Math.max(0, deadline - Date.now());
+      const code = ms > 0 && d?.code ? d.code : null;
+      setChildren(digits, ...(code || "····").split("").map((c) => el("span", {}, c)));
+      digits.classList.toggle("expired", !code);
+      const sec = Math.ceil(ms / 1000);
+      left.textContent = code ? `${Math.floor(sec / 60)}:${pad(sec % 60)}` : "код истёк";
+      fill.style.transform = `scaleX(${code ? Math.min(1, ms / 1000 / d.ttl) : 0})`;
+    }
+
+    function show(x) {
+      d = x;
+      deadline = Date.now() + (d.expires_in || 0) * 1000;
+      const source = d.by_teacher
+        ? `Отметку ведёт преподаватель${d.teacher ? " — " + d.teacher : ""}. Поменять отметки может только он.`
+        : d.open ? "Студенты вводят код в приложении: «Расписание» → «Отметиться на паре»." : null;
+      const actions = [];
+      if (d.editable && d.open) {
+        actions.push(el("div", { class: "att-code" }, digits,
+          el("div", { class: "progress" }, el("div", { class: "track" }, fill), left),
+          el("div", { class: "att-code-actions" },
+            el("button", { class: "btn tinted small", onclick: async (e) => {
+              const r = await call(`/api/admin/attendance/${d.id}/code`, { method: "POST" }, e.currentTarget);
+              if (r) { haptic("medium"); show(r); }
+            } }, icon("refresh"), "Новый код"),
+            el("button", { class: "btn tinted small", onclick: async (e) => {
+              const r = await call(`/api/admin/attendance/${d.id}/close`, { method: "POST" }, e.currentTarget);
+              if (r) { hapticResult("success"); toast(`В журнале: ${r.present} из ${r.total}`); show(r); }
+            } }, "Завершить"))));
+        drawCode();
+      } else if (d.editable && isToday) {
+        actions.push(el("button", { class: "btn tinted block", onclick: async (e) => {
+          const r = await call(`/api/admin/attendance/${d.id}/code`, { method: "POST" }, e.currentTarget);
+          if (r) { hapticResult("success"); show(r); }
+        } }, icon("hash"), "Показать код студентам"));
+      }
+      const toggle = d.editable ? async (st, present) => {
+        const r = await call(`/api/admin/attendance/${d.id}/marks/${st.id}`, { method: "PUT", body: { present } });
+        if (r) haptic();
+        show(r || d);
+      } : null;
+      const remove = d.editable ? el("button", { class: "link-btn small danger-text att-remove", onclick: async () => {
+        if (!(await confirmDialog("Удалить отметку этой пары? Она пропадёт из журнала группы.", "Удалить"))) return;
+        if (await call(`/api/admin/attendance/${d.id}`, { method: "DELETE" })) { toast("Отметка удалена"); close(); }
+      } }, "Удалить отметку") : null;
+      setChildren(body,
+        el("div", { class: "big-line" }, el("b", {}, `${d.present} из ${d.total}`), el("span", {}, "отметились")),
+        source ? el("p", { class: "note" }, source) : null,
+        ...actions, error,
+        ...rosterCards(d, toggle, "Нажми на кружок, чтобы отметить студента вручную."),
+        remove);
+      stop();
+      if (d.open) {
+        tick = setInterval(drawCode, 250);
+        poll = setTimeout(refresh, 3000);
+      }
+    }
+    async function refresh() {
+      if (!d || !body.isConnected) return;
+      try { show(await api(`/api/admin/attendance/${d.id}`)); }
+      catch (_) { poll = setTimeout(refresh, 3000); }
+    }
+
+    if (sessionId) {
+      api(`/api/admin/attendance/${sessionId}`).then(show).catch((e) => setChildren(body, el("p", { class: "sheet-error" }, e.message)));
+    } else empty();
+  }, () => {
+    stop();
+    if (!changed) return;
+    if (onchange) onchange();
+    else if (state.week && !$("screen-schedule").hidden) loadWeek();
+  });
+}
+
+const rateText = (rate) => (rate === null || rate === undefined ? "—" : `${rate}%`);
+
+// Журнал группы: явка, студенты по пропускам, все пары с отметкой
+function attendanceBlock(group) {
+  const box = el("div", { class: "stackv" }, loadingNote());
+  let current = group || state.groups?.[0];
+  const picker = !group && state.groups?.length > 1
+    ? el("select", { class: "full", "aria-label": "Группа", onchange: (e) => { current = e.target.value; load(); } },
+      ...state.groups.map((g) => el("option", { value: g }, formatGroup(g))))
+    : null;
+  async function load() {
+    setChildren(box, picker, loadingNote());
+    if (!current) { setChildren(box, el("p", { class: "page-note" }, "Групп пока нет.")); return; }
+    let j;
+    try { j = await api("/api/admin/attendance?group=" + encodeURIComponent(current)); }
+    catch (e) { setChildren(box, picker, errorNote(e)); return; }
+    const byId = new Map(j.sessions.map((x) => [x.id, x]));
+    const openSession = (x) => attendanceSheet(current, x.date, x, { sessionId: x.id, onchange: load });
+    const students = [...j.students].sort((a, b) =>
+      (a.rate ?? 101) - (b.rate ?? 101) || a.full_name.localeCompare(b.full_name, "ru"));
+    const byDate = new Map();
+    for (const x of j.sessions) {
+      if (!byDate.has(x.date)) byDate.set(x.date, []);
+      byDate.get(x.date).push(x);
+    }
+    setChildren(box, picker,
+      el("section", { class: "hero" },
+        el("div", { class: "hero-top" }, el("span", {}, "Явка группы"), el("span", {}, formatGroup(current))),
+        el("div", { class: "big-line" }, el("b", {}, rateText(j.rate)),
+          el("span", {}, j.sessions.length ? `средняя явка · ${countOf(j.sessions.length, "пара", "пары", "пар")} с отметкой` : "пар с отметкой пока нет"))),
+      j.sessions.length ? null : el("p", { class: "page-note" },
+        "Отметки появляются, когда преподаватель открывает код на паре или ты отмечаешь пару сам: "
+        + "«Расписание» → прошедшая пара → «Отметить, кто был»."),
+      students.length ? el("section", { class: "panel list" },
+        el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, "Студенты"), el("span", { class: "chip" }, String(students.length))),
+        ...students.map((st) => el("button", { class: "roster-row as-btn", onclick: () => studentMissedSheet(st, byId, openSession) },
+          el("span", { class: "grow" }, el("b", {}, st.full_name),
+            el("small", {}, [st.total ? `на парах: ${st.attended} из ${st.total}` : "пар с отметкой не было",
+              st.missed.length && `пропусков: ${st.missed.length}`, !st.in_app && "нет в приложении"].filter(Boolean).join(" · "))),
+          st.rate !== null ? el("span", { class: "rate" + (st.rate < 50 ? " low" : "") }, `${st.rate}%`) : null))) : null,
+      ...[...byDate].map(([date, items]) => el("section", { class: "panel list" },
+        el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, dateLabel(date))),
+        ...items.map((x) => listRow({
+          label: x.start ? `${x.start}–${x.end}` : null, title: x.subject,
+          hint: (x.by_teacher ? "отмечал преподаватель" : "отметка старосты") + (x.open ? " · идёт отметка" : ""),
+          value: `${x.present}/${x.total}`, onclick: () => openSession(x),
+        })))),
+      j.sessions.length ? el("section", { class: "panel list" }, listRow({
+        iconName: "file", title: "Журнал в Excel", hint: "файл .xlsx — сохранить или отправить",
+        onclick: async () => {
+          try { await saveFile(await apiFile("/api/admin/attendance/export?group=" + encodeURIComponent(current))); hapticResult("success"); }
+          catch (e) { toast(e.message); }
+        },
+      })) : null);
+  }
+  return block("Посещаемость", box, load, { bare: true });
+}
+
+// Какие пары студент пропустил — нажать, чтобы открыть пару
+function studentMissedSheet(st, byId, openSession) {
+  const missed = st.missed.map((id) => byId.get(id)).filter(Boolean);
+  openSheet(st.full_name, st.total ? `На парах: ${st.attended} из ${st.total}${st.rate !== null ? ` · ${st.rate}%` : ""}` : "Пар с отметкой не было",
+    (card, close) => card.append(el("div", { class: "att-sheet" },
+      missed.length
+        ? el("section", { class: "panel list" },
+          el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, "Пропуски"), el("span", { class: "chip muted" }, String(missed.length))),
+          ...missed.map((x) => listRow({
+            label: `${dateLabel(x.date)}${x.start ? ", " + x.start : ""}`, title: x.subject,
+            onclick: () => { close(); openSession(x); },
+          })))
+        : el("p", { class: "note" }, st.total ? "Пропусков нет 🎉" : "Пока не было пар с отметкой."))));
+}
+
+// На главной старосты: явка группы и у кого больше всего пропусков
+function attendanceCard(group) {
+  const card = el("section", { class: "panel list" },
+    el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, "Посещаемость")),
+    el("p", { class: "note list-pad" }, "Загрузка…"));
+  api("/api/admin/attendance?group=" + encodeURIComponent(group)).then((j) => {
+    const head = card.firstChild;
+    if (j.rate !== null) head.append(el("span", { class: "chip" }, `явка ${j.rate}%`));
+    const worst = j.students.filter((st) => st.missed.length)
+      .sort((a, b) => b.missed.length - a.missed.length || a.full_name.localeCompare(b.full_name, "ru")).slice(0, 3);
+    setChildren(card, head,
+      j.sessions.length ? null : el("p", { class: "note list-pad" },
+        "Отметь, кто был: в «Расписании» нажми на прошедшую пару → «Отметить, кто был». Или покажи код на идущей паре."),
+      ...worst.map((st) => listRow({
+        title: st.full_name, hint: `на парах: ${st.attended} из ${st.total}`,
+        value: countOf(st.missed.length, "пропуск", "пропуска", "пропусков"),
+        onclick: () => openSection(attendanceBlock(group)),
+      })),
+      listRow({ iconName: "checkCircle", title: j.sessions.length ? `Журнал (${countOf(j.sessions.length, "пара", "пары", "пар")})` : "Журнал посещаемости",
+        onclick: () => openSection(attendanceBlock(group)) }));
+  }).catch((e) => setChildren(card, card.firstChild, el("p", { class: "note list-pad" }, e.message)));
+  return card;
 }
 
 // --- студент: «Отметиться на паре» ------------------------------------------------
@@ -2598,7 +2860,7 @@ function openCheckin() {
   const card = el("div", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-labelledby": "sheet-title" },
     closeBtn(),
     el("h2", { id: "sheet-title" }, "Отметиться на паре"),
-    el("p", { class: "sheet-sub" }, "Введи код, который показал преподаватель. Он работает минуту."),
+    el("p", { class: "sheet-sub" }, "Введи код, который показал преподаватель или староста. Он работает минуту."),
     field, error, submit);
   const backdrop = el("div", { class: "sheet-backdrop", onclick: (e) => { if (e.target === backdrop) close(); } }, card);
   const onKey = (e) => { if (e.key === "Escape") close(); };
@@ -2933,10 +3195,10 @@ async function renderTeacher() {
   setChildren(box, head, hero, subjectsCard, journal,
     t.sessions_total ? el("section", { class: "panel list" },
       listRow({ iconName: "file", title: "Журнал в Excel", hint: "файл .xlsx — сохранить или отправить", onclick: exportJournal })) : null);
-  if (state.teacherNext === "people") {
-    state.teacherNext = null;
-    openSection(teacherPeopleBlock(), "teacher");
-  }
+  const next = state.teacherNext;
+  state.teacherNext = null;
+  if (next === "people") openSection(teacherPeopleBlock(), "teacher");
+  else if (next) openSection(next, "teacher");
 }
 
 function sessionRow(x, withDate = true) {

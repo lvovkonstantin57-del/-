@@ -15,9 +15,10 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import attendance, backup, db, notify, pictures, plan, roles, schedule, security, stats, users
+from app import attendance, backup, db, journal, notify, pictures, plan, roles, schedule, security, stats, users
 from app.api import auth as auth_api
 from app.api import changes as changes_api
+from app.api import journal as journal_api
 from app.api import notifications as notifications_api
 from app.api import pictures as pictures_api
 from app.api import teacher as teacher_api
@@ -303,7 +304,8 @@ async def get_schedule(
     edit: bool = False,
 ):
     """Неделя пар: своей группы, выбранной (админу) или, при mine, только пары преподавателя.
-    edit — для разовых изменений: пары обеих половин группы (старосте и админу)."""
+    edit — для разовых изменений: пары обеих половин группы (старосте и админу).
+    У начавшихся пар — attendance: кто отметился (старосте — по группе, студенту — он сам)."""
     day = day or today()
     start = await db.get_semester_start(s)
     mon = schedule.monday(day)
@@ -319,14 +321,13 @@ async def get_schedule(
             raise HTTPException(403, "Это расписание преподавателя")
         by_day = await attendance.teacher_days(s, user.teacher, dates)
         found = bool(await attendance.teacher_lessons(s, user.teacher)) or any(x.lessons for x in by_day.values())
-        return {
-            "mine": True, "found": found, "group": None, "half": None, "can_edit": False, **week,
-            "days": [
-                {"date": d.isoformat(), "weekday": i, "lessons": attendance.teacher_items(by_day[d].lessons),
-                 "cancelled": attendance.teacher_items(by_day[d].cancelled)}
-                for i, d in enumerate(dates)
-            ],
-        }
+        days = [
+            {"date": d.isoformat(), "weekday": i, "lessons": attendance.teacher_items(by_day[d].lessons),
+             "cancelled": attendance.teacher_items(by_day[d].cancelled)}
+            for i, d in enumerate(dates)
+        ]
+        await journal.mark_teacher_days(s, user.teacher, days)
+        return {"mine": True, "found": found, "group": None, "half": None, "can_edit": False, **week, "days": days}
     if group and group != user.group_name:
         if not user.is_admin and not user.is_teacher:
             raise HTTPException(403, "Можно смотреть только свою группу")
@@ -344,6 +345,7 @@ async def get_schedule(
         "lessons": [asdict(schedule.LessonDTO.of(l)) for l in by_day[d].lessons],
         "cancelled": [asdict(schedule.LessonDTO.of(l)) for l in by_day[d].cancelled],
     } for i, d in enumerate(dates)]
+    await journal.mark_group_days(s, user, group, by_day, days)
     return {"mine": False, "group": group, "half": half, "can_edit": user.can_manage(group), **week, "days": days}
 
 
@@ -834,6 +836,7 @@ def create_app() -> FastAPI:
     app.include_router(notifications_api.api)
     app.include_router(api)
     app.include_router(changes_api.api)
+    app.include_router(journal_api.api)
     app.include_router(pictures_api.api)
     app.include_router(teacher_api.api)
 

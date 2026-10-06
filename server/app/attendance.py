@@ -10,6 +10,7 @@ import re
 import secrets
 import time
 from collections import Counter, defaultdict, deque
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 
@@ -619,12 +620,19 @@ def _sheet_title(name: str, used: set[str]) -> str:
 
 
 async def export_xlsx(s: AsyncSession, teacher: Teacher) -> bytes | None:
-    """Журнал в Excel: лист на предмет, строки — студенты по подгруппам, столбцы — пары.
-    None — пар ещё нет."""
+    """Журнал преподавателя в Excel. None — пар ещё нет."""
     sessions = list(reversed(await teacher_sessions(s, teacher)))
     if not sessions:
         return None
-    r = await rosters_for(s, sessions)
+    return journal_xlsx(sessions, await rosters_for(s, sessions), lambda x: ", ".join(x.group_names))
+
+
+def journal_xlsx(
+    sessions: list[AttendanceSession], r: Rosters, note: Callable[[AttendanceSession], str],
+    keep: Callable[[Student], bool] = lambda st: True,
+) -> bytes:
+    """Лист на предмет, строки — студенты по подгруппам, столбцы — пары по порядку.
+    note — вторая строка заголовка столбца; keep — кого из студентов показывать."""
     wb = Workbook()
     wb.remove(wb.active)
     used: set[str] = set()
@@ -632,13 +640,13 @@ async def export_xlsx(s: AsyncSession, teacher: Teacher) -> bytes | None:
         ws = wb.create_sheet(_sheet_title(subject, used))
         mine = [x for x in sessions if x.subject == subject]
         ws.append(["Группа", "ФИО"] + [
-            f"{x.lesson_date:%d.%m} {x.start_time or local_hhmm(x.created_at)}\n{', '.join(x.group_names)}"
-            for x in mine
+            f"{x.lesson_date:%d.%m} {x.start_time or local_hhmm(x.created_at)}\n{note(x)}" for x in mine
         ] + ["Был", "Из", "%"])
         expected = {x.id: {st.id for st in r.expected(x)} for x in mine}
         marked = {x.id: {m.student_id for m in x.marks} for x in mine}
         students = {sid for ids in expected.values() for sid in ids}
-        for st in sorted((r.by_id[sid] for sid in students), key=lambda st: (st.group_name, st.full_name)):
+        chosen = [r.by_id[sid] for sid in students if keep(r.by_id[sid])]
+        for st in sorted(chosen, key=lambda st: (st.group_name, st.full_name)):
             cells, was, should = [], 0, 0
             for x in mine:
                 if st.id in marked[x.id]:
