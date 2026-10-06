@@ -1,9 +1,9 @@
 # Сборка приложений: APK для Android и IPA для iPhone.
 # Готовые файлы — во вкладке Releases («Приложение · сборка N») и в артефактах запуска.
 #
-# Адрес сервера, который вшить в приложение: переменная репозитория API_URL
-# (Settings → Secrets and variables → Actions → Variables) или поле при ручном запуске.
-# Без адреса приложение спросит его при первом запуске.
+# Адрес сервера, который вшить в приложение: поле при ручном запуске, переменная репозитория
+# API_URL (Settings → Secrets and variables → Actions → Variables), иначе — адрес в API_URL ниже.
+# В приложении адрес всегда можно поменять на экране входа («Сервер: … · изменить»).
 name: Сборка APK и IPA
 
 on:
@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       api_url:
-        description: "Адрес сервера (https://…). Пусто — приложение спросит при запуске"
+        description: "Адрес сервера (https://…). Пусто — переменная API_URL или https://135-106-163-67.sslip.io"
         required: false
         default: ""
 
@@ -27,7 +27,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  API_URL: ${{ inputs.api_url || vars.API_URL }}
+  # Последний вариант — сервер, развёрнутый install.sh на VPS
+  API_URL: ${{ inputs.api_url || vars.API_URL || 'https://135-106-163-67.sslip.io' }}
   APP_NAME: ${{ vars.APP_NAME }}
   VERSION_NAME: "1.0.${{ github.run_number }}"
   VERSION_CODE: ${{ github.run_number }}

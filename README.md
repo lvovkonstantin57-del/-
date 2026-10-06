@@ -46,6 +46,25 @@ mobile/   приложение для Android и iOS (Capacitor) — тот же
 
 ## Сервер
 
+Сейчас: **https://135-106-163-67.sslip.io** (VPS `135.106.163.67`). Этот адрес вшит в APK и IPA.
+
+### Установка одной командой
+
+На VPS с Ubuntu или Debian под root:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/lvovkonstantin57-del/-/main/install.sh | bash
+```
+
+Скрипт ставит Docker, скачивает код в `/opt/raspisanie`, создаёт `server/.env` с адресом `https://<IP-через-дефисы>.sslip.io` и кодом главного админа, запускает сервер вместе с Caddy (HTTPS-сертификат он получает сам) и в конце печатает адрес и код. Нужно, чтобы у хостинга были открыты входящие порты 80 и 443.
+
+- **Обновить сервер** — запустить ту же команду ещё раз. `.env` и база остаются.
+- **Свой домен** вместо sslip.io: `… | DOMAIN=schedule.example.ru bash` (A-запись домена — на IP сервера).
+- **На сервере уже есть nginx или Caddy**: `… | NO_CADDY=1 bash`, затем проксируй домен на `127.0.0.1:8080`.
+- Код главного админа лежит в `/opt/raspisanie/server/.env` (`OWNER_CODE`). Регистр и дефисы при вводе не важны.
+
+### Установка вручную
+
 Нужен VPS с Docker и домен с HTTPS: приложение на телефоне подключается к серверу только по HTTPS. Подойдёт и бесплатный домен вида `1-2-3-4.sslip.io`, где цифры — IP сервера через дефис.
 
 ```bash
@@ -79,7 +98,8 @@ schedule.example.ru {
 ### Обновление и бэкап
 
 ```bash
-git pull && docker compose --profile caddy up -d --build
+curl -fsSL https://raw.githubusercontent.com/lvovkonstantin57-del/-/main/install.sh | bash   # если ставил скриптом
+git pull && docker compose --profile caddy up -d --build                                       # если вручную
 ```
 
 Каждую ночь в 04:00 сервер сохраняет копию базы в `/data/backups` внутри тома (хранятся последние 14). Главный админ может скачать бэкап в приложении: «Команда» → «Скачать бэкап базы».
@@ -110,7 +130,7 @@ docker compose run --rm app python -m app.legacy /data/bot.db
 
 Сборку делает GitHub Actions (`.github/workflows/build-apps.yml`) при каждом изменении `mobile/` или интерфейса, и вручную: Actions → «Сборка APK и IPA» → Run workflow. Готовые файлы появляются во вкладке **Releases** («Приложение · сборка N»).
 
-**Адрес сервера в приложении.** Задай переменную репозитория `API_URL` (Settings → Secrets and variables → Actions → Variables → `API_URL` = `https://schedule.example.ru`), и он будет вшит в сборку. Без неё приложение спросит адрес при первом запуске.
+**Адрес сервера в приложении.** В сборку вшит `https://135-106-163-67.sslip.io` (последний вариант в `API_URL` в `.github/workflows/build-apps.yml`). Другой адрес — переменная репозитория `API_URL` (Settings → Secrets and variables → Actions → Variables) или поле при ручном запуске сборки. В самом приложении адрес меняется на экране входа: «Сервер: … · изменить».
 
 ### Android
 
