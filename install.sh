@@ -4,14 +4,22 @@
 #   curl -fsSL https://raw.githubusercontent.com/lvovkonstantin57-del/-/main/install.sh | bash
 #
 # Что делает: ставит Docker (если его нет), скачивает код в /opt/raspisanie, создаёт server/.env
-# с адресом https://<IP-через-дефисы>.sslip.io и кодом главного админа, запускает сервер вместе
-# с Caddy (HTTPS-сертификат он получает сам) и проверяет, что всё открывается.
+# с адресом https://<IP-через-дефисы>.sslip.io и кодом главного админа, запускает сервер и
+# проверяет, что всё открывается по HTTPS. Сертификат получает Caddy:
+#   • порты 80 и 443 свободны — свой Caddy в контейнере;
+#   • на сервере уже работает Caddy (например, для Telegram-бота) — скрипт дописывает свой сайт
+#     в /etc/caddy/Caddyfile, а сервер приложения встаёт на свободный порт рядом с ботом.
+# Если на этом же сервере работает Telegram-бот, при первой установке его группы, расписание
+# и журнал посещаемости переносятся в приложение. Бот при этом не останавливается.
 #
 # Повторный запуск той же командой обновляет сервер до свежей версии из GitHub; .env и база
 # остаются как были. Настройки через переменные перед bash:
 #   DOMAIN=schedule.example.ru   свой домен вместо sslip.io (A-запись должна указывать на сервер)
-#   NO_CADDY=1                   на сервере уже есть свой nginx или Caddy — HTTPS настроишь в нём
-#   APP_PORT=8081                порт на 127.0.0.1 для своего прокси, если 8080 занят
+#   NO_CADDY=1                   HTTPS настроишь сам в своём nginx/Caddy (проксируй на APP_PORT)
+#   APP_PORT=8081                порт на 127.0.0.1 для сервера приложения (по умолчанию 8080
+#                                или первый свободный после него)
+#   NO_IMPORT=1                  не переносить данные Telegram-бота; IMPORT_BOT=1 — перенести
+#                                и при повторном запуске (только в пустую базу)
 #   INSTALL_DIR, REPO_URL, BRANCH — откуда и куда ставить
 
 set -euo pipefail
@@ -21,6 +29,13 @@ BRANCH="${BRANCH:-main}"
 DIR="${INSTALL_DIR:-/opt/raspisanie}"
 PROJECT=raspisanie   # имя проекта в server/docker-compose.yml
 CODE_ALPHABET=ABCDEFGHJKLMNPQRSTUVWXYZ23456789   # без 0/O и 1/I, как у остальных кодов
+CADDYFILE=/etc/caddy/Caddyfile
+BLOCK_BEGIN="# >>> raspisanie: сервер приложения, добавлено install.sh"
+BLOCK_END="# <<< raspisanie"
+
+MODE=""        # caddy — свой Caddy в контейнере, host-caddy — Caddy сервера, none — HTTPS настроен вручную
+FIRST_RUN=""   # сервер приложения на этой машине ещё ни разу не запускался
+DOMAIN_NOTE=""
 
 say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m%s\033[0m\n' "$*" >&2; }
@@ -117,32 +132,142 @@ configure() {
     set_env DOMAIN "${ip//./-}.sslip.io"
   fi
   [ -n "$(get_env OWNER_CODE)" ] || set_env OWNER_CODE "$(new_owner_code)"
-  if [ -n "${APP_PORT:-}" ]; then set_env APP_PORT "$APP_PORT"; fi
-  [ -n "$(get_env APP_PORT)" ] || set_env APP_PORT 8080
+  docker volume inspect "${PROJECT}_app_data" >/dev/null 2>&1 || FIRST_RUN=1
 }
 
-# 80 и 443 нужны Caddy: по ним ходят приложения и Let's Encrypt при выдаче сертификата
-check_ports() {
-  local port ports=("$(get_env APP_PORT)") busy=() ours
-  [ -n "${NO_CADDY:-}" ] || ports+=(80 443)
-  ours=$(docker ps -q --filter "label=com.docker.compose.project=$PROJECT")
-  for port in "${ports[@]}"; do
-    if ss -Hltn "sport = :$port" 2>/dev/null | grep -q .; then busy+=("$port"); fi
-  done
-  [ ${#busy[@]} -eq 0 ] && return
-  [ -n "$ours" ] && return   # занято нашим же сервером — это обновление
-  warn "Порты ${busy[*]} уже заняты:"
-  ss -Hltnp 2>/dev/null | grep -E ":($(IFS='|'; echo "${busy[*]}"))\s" >&2 || true
-  docker ps --format '  контейнер {{.Names}} ({{.Image}}): {{.Ports}}' 2>/dev/null | grep -E ":($(IFS='|'; echo "${busy[*]}"))->" >&2 || true
-  die "освободи порты и запусти установку ещё раз.
-  • Если это старый Telegram-бот: в его папке выполни  docker compose --profile caddy down
-    (база бота останется; перенести её в приложение — README, «Перенос данных из Telegram-бота»).
-  • Если на сервере свой nginx или Caddy: запусти с NO_CADDY=1 и проксируй домен на 127.0.0.1:$(get_env APP_PORT).
-  • Если занят только $(get_env APP_PORT): запусти с APP_PORT=8081."
+# Кто слушает порт: пусто — свободен, ours — наш контейнер, docker:<имя> — чужой контейнер,
+# иначе имя программы на сервере (caddy, nginx, …)
+port_owner() {
+  local line proc name
+  line=$(ss -Hltnp "sport = :$1" 2>/dev/null | head -n 1)
+  [ -n "$line" ] || return 0
+  proc=$(sed -n 's/.*users:(("\([^"]*\)".*/\1/p' <<<"$line")
+  if [ "$proc" = docker-proxy ]; then
+    name=$(docker ps --format '{{.Names}} {{.Ports}}' | grep -E ":$1->" | head -n 1 | cut -d' ' -f1)
+    if [ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$name" 2>/dev/null)" = "$PROJECT" ]; then
+      echo ours
+    else
+      echo "docker:${name:-?}"
+    fi
+  else
+    echo "${proc:-неизвестная программа}"
+  fi
+}
+
+describe_owner() {
+  case "$1" in
+    "") echo "свободен" ;;
+    docker:*) echo "контейнер ${1#docker:}" ;;
+    *) echo "программа $1" ;;
+  esac
+}
+
+# 80 и 443 нужны для HTTPS: по ним ходят приложения и Let's Encrypt при выдаче сертификата
+choose_mode() {
+  local p80 p443
+  if [ -n "${NO_CADDY:-}" ]; then
+    MODE=none
+  else
+    MODE=$(get_env INSTALL_PROXY)
+    if [ -z "$MODE" ] || [ "$MODE" = caddy ]; then
+      p80=$(port_owner 80)
+      p443=$(port_owner 443)
+      if [[ -z $p80 || $p80 = ours ]] && [[ -z $p443 || $p443 = ours ]]; then
+        MODE=caddy
+      elif [ "$p80" = caddy ] && [ "$p443" = caddy ]; then
+        if ! { [ -f "$CADDYFILE" ] && systemctl is-active --quiet caddy 2>/dev/null; }; then
+          die "порты 80 и 443 занимает Caddy, но не служба caddy с $CADDYFILE — добавить сайт сам не смогу.
+  Запусти с NO_CADDY=1 и проксируй домен в своём Caddy на 127.0.0.1:<порт из итогов установки>."
+        fi
+        MODE=host-caddy
+        say "Порты 80 и 443 у Caddy сервера — допишу свой сайт в $CADDYFILE, остальные сайты не трогаю"
+      else
+        warn "Порт 80: $(describe_owner "$p80"), порт 443: $(describe_owner "$p443")"
+        die "порты 80 и 443 заняты не Caddy. Варианты:
+  • Если это старый Telegram-бот со своим Caddy в контейнере: в его папке выполни
+    docker compose --profile caddy down — и запусти установку ещё раз.
+  • Если это твой nginx или другой веб-сервер: запусти с NO_CADDY=1 и проксируй домен
+    на 127.0.0.1:<порт из итогов установки>."
+      fi
+    fi
+  fi
+  set_env INSTALL_PROXY "$MODE"
+}
+
+choose_port() {
+  local port wanted owner
+  wanted=${APP_PORT:-}
+  port=${wanted:-$(get_env APP_PORT)}
+  port=${port:-8080}
+  owner=$(port_owner "$port")
+  if [ -n "$owner" ] && [ "$owner" != ours ]; then
+    [ -z "$wanted" ] || die "порт $port занят ($(describe_owner "$owner")). Выбери другой: APP_PORT=$((port + 1))"
+    local busy=$port
+    for port in $(seq 8081 8099); do [ -z "$(port_owner "$port")" ] && break; done
+    [ -z "$(port_owner "$port")" ] || die "не нашёл свободный порт в 8081–8099. Укажи сам: APP_PORT=…"
+    say "Порт $busy занят ($(describe_owner "$owner")) — сервер приложения будет на 127.0.0.1:$port"
+  fi
+  set_env APP_PORT "$port"
+}
+
+# Адреса сайтов в Caddyfile, кроме нашего блока
+caddy_sites() {
+  awk -v b="$BLOCK_BEGIN" -v e="$BLOCK_END" '
+    $0 == b { skip = 1; next }
+    $0 == e { skip = 0; next }
+    skip { next }
+    { sub(/#.*/, "") }
+    depth == 0 && /\{[ \t]*$/ {
+      line = $0; sub(/\{[ \t]*$/, "", line)
+      n = split(line, a, /[ \t,]+/)
+      for (i = 1; i <= n; i++) if (a[i] != "") print a[i]
+    }
+    { depth += gsub(/\{/, "{") - gsub(/\}/, "}") }
+  ' "$CADDYFILE" | sed -E 's#^https?://##; s#/.*$##; s#:[0-9]+$##'
+}
+
+configure_host_caddy() {
+  local domain port tmp
+  domain=$(get_env DOMAIN)
+  port=$(get_env APP_PORT)
+  if caddy_sites | grep -qxF "$domain"; then
+    [ -z "${DOMAIN:-}" ] || die "домен $domain уже занят другим сайтом в $CADDYFILE. Укажи другой: DOMAIN=…"
+    # Основной адрес уже у другого сайта (обычно у Telegram-бота) — приложению отдельное имя на том же IP
+    DOMAIN_NOTE="$domain уже занят другим сайтом в $CADDYFILE (скорее всего, Telegram-ботом)"
+    domain="app.$domain"
+    set_env DOMAIN "$domain"
+  fi
+
+  tmp=$(mktemp)
+  # Убираем свой прошлый блок и пустые строки в конце, дописываем свежий
+  awk -v b="$BLOCK_BEGIN" -v e="$BLOCK_END" '
+    $0 == b { skip = 1; next }
+    $0 == e { skip = 0; next }
+    skip { next }
+    /^[ \t]*$/ { blank = blank $0 "\n"; next }
+    { printf "%s%s\n", blank, $0; blank = "" }
+  ' "$CADDYFILE" > "$tmp"
+  printf '\n%s\n%s {\n\tencode gzip\n\treverse_proxy 127.0.0.1:%s\n}\n%s\n' \
+    "$BLOCK_BEGIN" "$domain" "$port" "$BLOCK_END" >> "$tmp"
+  if cmp -s "$tmp" "$CADDYFILE"; then
+    rm -f "$tmp"
+    return
+  fi
+
+  say "Добавляю $domain в $CADDYFILE"
+  cp -p "$CADDYFILE" "$CADDYFILE.bak-raspisanie"
+  cat "$tmp" > "$CADDYFILE"   # так у файла остаются прежние владелец и права
+  rm -f "$tmp"
+  # Неверную настройку reload не применяет — Caddy продолжает работать со старой
+  if ! systemctl reload caddy; then
+    cat "$CADDYFILE.bak-raspisanie" > "$CADDYFILE"
+    die "Caddy не принял новую настройку — вернул $CADDYFILE как было (копия: $CADDYFILE.bak-raspisanie).
+  Подробности: journalctl -u caddy -n 30"
+  fi
 }
 
 open_firewall() {
-  [ -n "${NO_CADDY:-}" ] && return
+  [ "$MODE" = caddy ] || return 0
   if command -v ufw >/dev/null && ufw status 2>/dev/null | grep -q "Status: active"; then
     say "Открываю порты 80 и 443 в ufw"
     ufw allow 80/tcp >/dev/null && ufw allow 443/tcp >/dev/null && ufw allow 443/udp >/dev/null
@@ -160,16 +285,59 @@ pull_image() {
   die "не получилось скачать образ $1 ни с Docker Hub, ни с mirror.gcr.io"
 }
 
-start() {
+build_image() {
   say "Скачиваю образы"
   pull_image python:3.12-slim
-  [ -n "${NO_CADDY:-}" ] || pull_image caddy:2
+  if [ "$MODE" = caddy ]; then pull_image caddy:2; fi
+  say "Собираю сервер"
+  docker compose build app
+}
 
-  say "Собираю и запускаю сервер"
-  if [ -n "${NO_CADDY:-}" ]; then
-    docker compose up -d --build --remove-orphans app
+# Контейнер Telegram-бота на этой же машине: в нём лежит его база (DB_PATH, по умолчанию /data/bot.db)
+find_bot_container() {
+  local c
+  for c in $(docker ps --format '{{.Names}}'); do
+    [ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.project"}}' "$c" 2>/dev/null)" = "$PROJECT" ] && continue
+    if docker exec "$c" sh -c 'test -f "${DB_PATH:-/data/bot.db}"' >/dev/null 2>&1; then
+      echo "$c"
+      return
+    fi
+  done
+}
+
+import_bot_data() {
+  [ -z "${NO_IMPORT:-}" ] || return 0
+  [ -n "$FIRST_RUN" ] || [ -n "${IMPORT_BOT:-}" ] || return 0
+  local bot snapshot="$DIR/server/bot-import.db"
+  bot=$(find_bot_container)
+  [ -n "$bot" ] || return 0
+
+  say "Переношу данные Telegram-бота из контейнера $bot (бот продолжит работать)"
+  # Снимок базы средствами SQLite — целый, даже пока бот в неё пишет
+  if ! docker exec "$bot" python -c '
+import os, sqlite3
+src = sqlite3.connect(os.environ.get("DB_PATH", "/data/bot.db"))
+dst = sqlite3.connect("/tmp/raspisanie-import.db")
+src.backup(dst)
+dst.execute("PRAGMA journal_mode=DELETE")
+dst.close()
+src.close()' || ! docker cp "$bot:/tmp/raspisanie-import.db" "$snapshot" >/dev/null; then
+    warn "Не получилось скопировать базу бота — пропускаю перенос. Перенести позже: README, «Перенос данных из Telegram-бота»"
+    return 0
+  fi
+  docker exec "$bot" rm -f /tmp/raspisanie-import.db || true
+  chmod 644 "$snapshot"
+  docker compose run --rm --no-deps -v "$snapshot:/import/bot.db:ro" app python -m app.legacy /import/bot.db \
+    || warn "Перенос не удался (сообщение выше). Сервер всё равно запустится"
+  rm -f "$snapshot"   # в базе ФИО и почты — копию не оставляем
+}
+
+start_server() {
+  say "Запускаю сервер"
+  if [ "$MODE" = caddy ]; then
+    docker compose --profile caddy up -d --remove-orphans
   else
-    docker compose --profile caddy up -d --build --remove-orphans
+    docker compose up -d --remove-orphans app
   fi
 }
 
@@ -179,34 +347,43 @@ wait_ready() {
   domain=$(get_env DOMAIN)
   say "Жду, пока сервер запустится"
   for i in $(seq 1 60); do
-    curl -fsS -m 3 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1 && break
+    curl -fsS -m 3 --noproxy "*" "http://127.0.0.1:$port/healthz" >/dev/null 2>&1 && break
     [ "$i" -eq 60 ] && { docker compose logs --tail 40 app >&2 || true; die "сервер не запустился, лог выше"; }
     sleep 2
   done
-  [ -n "${NO_CADDY:-}" ] && return
+  [ "$MODE" != none ] || return 0
 
   say "Жду HTTPS-сертификат для $domain (до 3 минут)"
   for i in $(seq 1 36); do
     # Сертификат выдан — значит, Let's Encrypt достучался до сервера снаружи по 80/443
-    curl -fsS -m 5 --resolve "$domain:443:127.0.0.1" "https://$domain/healthz" >/dev/null 2>&1 && return
+    curl -fsS -m 5 --noproxy "*" --resolve "$domain:443:127.0.0.1" "https://$domain/healthz" >/dev/null 2>&1 && return
     sleep 5
   done
-  docker compose logs --tail 30 caddy >&2 || true
+  if [ "$MODE" = caddy ]; then
+    docker compose logs --tail 30 caddy >&2 || true
+  else
+    journalctl -u caddy --no-pager -n 30 >&2 || true
+  fi
   die "сервер запущен, но HTTPS-сертификат для $domain не получен (лог Caddy выше).
   Чаще всего закрыты порты: открой входящие 80 и 443 (TCP) в панели хостинга — раздел «Firewall»,
   «Сетевая безопасность» или похожий — и запусти установку ещё раз."
 }
 
 summary() {
-  local domain owner
+  local domain
   domain=$(get_env DOMAIN)
-  owner=$(get_env OWNER_CODE)
   printf '\n\033[1;32m✅ Сервер работает\033[0m\n\n'
-  if [ -n "${NO_CADDY:-}" ]; then
-    printf '  Сервер слушает 127.0.0.1:%s — проксируй на него %s со своим HTTPS.\n' "$(get_env APP_PORT)" "$domain"
-  fi
   printf '  Адрес сервера:        https://%s\n' "$domain"
-  printf '  Код главного админа:  %s\n\n' "$owner"
+  printf '  Код главного админа:  %s\n\n' "$(get_env OWNER_CODE)"
+  if [ -n "$DOMAIN_NOTE" ]; then
+    printf '  Адрес с «app.»: %s.\n' "$DOMAIN_NOTE"
+    printf '  Если в приложении другой адрес — на экране входа нажми «Сервер: … · изменить».\n\n'
+  fi
+  case "$MODE" in
+    host-caddy) printf '  HTTPS — через Caddy сервера (%s), сервер приложения на 127.0.0.1:%s.\n' "$CADDYFILE" "$(get_env APP_PORT)"
+                printf '  Остальные сайты в Caddy и Telegram-бот работают как раньше.\n\n' ;;
+    none)       printf '  HTTPS настрой сам: проксируй https://%s на 127.0.0.1:%s.\n\n' "$domain" "$(get_env APP_PORT)" ;;
+  esac
   printf '  1. Открой https://%s в браузере или приложение на телефоне и зарегистрируйся.\n' "$domain"
   printf '  2. Введи код главного админа в поле «Есть код группы?» (или «Профиль → Ввести код»).\n\n'
   printf '  Код хранится в %s/server/.env — никому его не отправляй.\n' "$DIR"
@@ -221,9 +398,13 @@ main() {
   install_docker
   fetch_code
   configure
-  check_ports
+  choose_mode
+  choose_port
   open_firewall
-  start
+  build_image
+  import_bot_data
+  start_server
+  if [ "$MODE" = host-caddy ]; then configure_host_caddy; fi
   wait_ready
   summary
 }
