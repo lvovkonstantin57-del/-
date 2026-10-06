@@ -78,7 +78,10 @@ async def test_owner_code(client, database):
     assert r.status_code == 404
     r = await client.post("/api/me/code", json={"code": "секрет"}, headers=acc.h)  # не ASCII — не падаем
     assert r.status_code == 404
-    r = await client.post("/api/me/code", json={"code": "secret-code"}, headers=acc.h)
+    r = await client.post("/api/me/code", json={"code": "---"}, headers=acc.h)
+    assert r.status_code == 404
+    # Телефон сам ставит заглавные, дефис можно не вводить
+    r = await client.post("/api/me/code", json={"code": " SECRET CODE "}, headers=acc.h)
     assert r.json()["kind"] == "owner"
     assert (await refresh(client, acc)).me["role"] == "owner"
 

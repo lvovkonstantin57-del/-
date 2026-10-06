@@ -1,3 +1,6 @@
+# Имя проекта — по нему install.sh узнаёт свои контейнеры
+name: raspisanie
+
 services:
   app:
     build: .

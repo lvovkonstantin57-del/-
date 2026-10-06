@@ -13,8 +13,15 @@ from app.users import AccountError
 log = logging.getLogger(__name__)
 
 
+def _owner_key(text: str) -> bytes:
+    # Как и остальные коды: регистр, дефисы, пробелы и кириллица-двойник не важны —
+    # поле ввода на телефоне само ставит заглавные
+    return "".join(ch for ch in text.translate(security.CYR_TO_LAT).upper() if ch.isalnum()).encode()
+
+
 def _is_owner_code(text: str) -> bool:
-    return bool(config.owner_code) and hmac.compare_digest(text.encode(), config.owner_code.encode())
+    expected = _owner_key(config.owner_code or "")
+    return bool(expected) and hmac.compare_digest(_owner_key(text), expected)
 
 
 async def apply_code(s: AsyncSession, user: User, text: str | None) -> dict:
