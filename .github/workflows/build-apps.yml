@@ -1,0 +1,158 @@
+# Сборка приложений: APK для Android и IPA для iPhone.
+# Готовые файлы — во вкладке Releases («Приложение · сборка N») и в артефактах запуска.
+#
+# Адрес сервера, который вшить в приложение: переменная репозитория API_URL
+# (Settings → Secrets and variables → Actions → Variables) или поле при ручном запуске.
+# Без адреса приложение спросит его при первом запуске.
+name: Сборка APK и IPA
+
+on:
+  push:
+    paths:
+      - "mobile/**"
+      - "server/app/webapp/**"
+      - ".github/workflows/build-apps.yml"
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: "Адрес сервера (https://…). Пусто — приложение спросит при запуске"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apps-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  API_URL: ${{ inputs.api_url || vars.API_URL }}
+  APP_NAME: ${{ vars.APP_NAME }}
+  VERSION_NAME: "1.0.${{ github.run_number }}"
+  VERSION_CODE: ${{ github.run_number }}
+
+jobs:
+  android:
+    name: Android (APK)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Зависимости
+        run: npm ci
+      - name: Интерфейс и плагины
+        run: npm run build && npx cap sync android
+      - name: Свой ключ подписи (если задан в секретах)
+        if: env.HAS_KEYSTORE == 'true'
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+        run: |
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+      - name: Сборка APK
+        working-directory: mobile/android
+        env:
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon --stacktrace
+          cp app/build/outputs/apk/release/app-release.apk "$GITHUB_WORKSPACE/raspisanie-mpgu.apk"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: raspisanie-mpgu.apk
+          if-no-files-found: error
+
+  ios:
+    name: iOS (IPA)
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+      - name: Xcode (самый новый стабильный на машине)
+        run: |
+          ls -d /Applications/Xcode*.app
+          XCODE="$(ls -d /Applications/Xcode_*.app | grep -iv beta | grep -iv rc | sort -V | tail -1)"
+          sudo xcode-select -s "$XCODE"
+          xcodebuild -version
+      - name: Зависимости
+        run: npm ci
+      - name: Интерфейс и плагины
+        run: npm run build && npx cap sync ios
+      - name: Сборка без подписи
+        working-directory: mobile/ios/App
+        run: |
+          xcodebuild -project App.xcodeproj -scheme App -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/App.xcarchive" \
+            MARKETING_VERSION="$VERSION_NAME" CURRENT_PROJECT_VERSION="$VERSION_CODE" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            -quiet archive
+      - name: Упаковка IPA
+        run: |
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$RUNNER_TEMP/App.xcarchive/Products/Applications/App.app" "$RUNNER_TEMP/ipa/Payload/"
+          cd "$RUNNER_TEMP/ipa"
+          zip -qry "$GITHUB_WORKSPACE/raspisanie-mpgu-unsigned.ipa" Payload
+          ls -la "$GITHUB_WORKSPACE/raspisanie-mpgu-unsigned.ipa"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-ipa
+          path: raspisanie-mpgu-unsigned.ipa
+          if-no-files-found: error
+
+  release:
+    name: Публикация в Releases
+    needs: [android, ios]
+    if: ${{ !cancelled() && (needs.android.result == 'success' || needs.ios.result == 'success') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Список файлов
+        run: ls -la out
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: app-build-${{ github.run_number }}
+          target_commitish: ${{ github.sha }}
+          name: "Приложение · сборка ${{ github.run_number }}"
+          prerelease: true
+          files: |
+            out/*.apk
+            out/*.ipa
+          body: |
+            **Версия 1.0.${{ github.run_number }}** · ветка `${{ github.ref_name }}` · коммит ${{ github.sha }}
+
+            📱 **Android** — `raspisanie-mpgu.apk`: скачай на телефон и открой. Если Android спросит — разреши установку из этого источника.
+
+            🍏 **iPhone** — `raspisanie-mpgu-unsigned.ipa`: файл без подписи Apple. Установить можно через Sideloadly или AltStore со своим Apple ID (бесплатный аккаунт — на 7 дней, потом переподписать), а для раздачи всем — подписать своим аккаунтом Apple Developer и выложить в TestFlight. Подробно — в README, раздел «Приложение на телефоне».
+
+            Сервер в сборке: ${{ env.API_URL || 'не вшит — приложение спросит адрес при первом запуске' }}

@@ -1,0 +1,34 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - app_data:/data
+    ports:
+      # наружу не торчит — только для Caddy/nginx на этом же сервере
+      - "127.0.0.1:${APP_PORT:-8080}:8000"
+
+  # Caddy в контейнере — если на сервере ещё нет своего веб-сервера. Сам получает HTTPS-сертификат.
+  # Запуск: docker compose --profile caddy up -d
+  caddy:
+    image: caddy:2
+    profiles: ["caddy"]
+    restart: unless-stopped
+    depends_on:
+      - app
+    environment:
+      DOMAIN: ${DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  app_data:
+  caddy_data:
+  caddy_config:
