@@ -207,3 +207,30 @@ def test_match_sessions():
     star = _session(start_time="09:00", opened_by=5, created_at=datetime(2026, 10, 5, 6, 0))
     teacher = _session(start_time="09:00", created_at=datetime(2026, 10, 5, 6, 10))
     assert journal.match_sessions(items, [star, teacher])[0] is teacher
+
+
+async def test_student_sees_own_attendance(c, database):
+    star = await _account(database, "star", "Тестов Тест Тестович", role=ROLE_STAROSTA)
+    anna = await _account(database, "anna", "Пробная Анна Сергеевна")
+    anna_id = await _sid(database, "Пробная Анна Сергеевна")
+    empty = (await c.get("/api/attendance/stats", headers=anna)).json()
+    assert empty == {"attended": 0, "total": 0, "rate": None, "subjects": [], "missed": []}
+
+    for start, subject in (("09:00", "Физкультура"), ("10:40", "Зоология")):
+        x = (await c.post("/api/admin/attendance", headers=star,
+                          json={"group": "ГР 1", "date": DAY, "start": start, "subject": subject})).json()
+        if subject == "Физкультура":
+            await c.put(f"/api/admin/attendance/{x['id']}/marks/{anna_id}", headers=star, json={"present": True})
+    old = (await c.post("/api/admin/attendance", headers=star,
+                        json={"group": "ГР 1", "date": "2026-09-28", "start": "09:00", "subject": "Физкультура"})).json()
+    assert old["present"] == 0
+
+    st = (await c.get("/api/attendance/stats", headers=anna)).json()
+    assert (st["attended"], st["total"], st["rate"]) == (1, 3, 33)
+    assert st["subjects"] == [
+        {"subject": "Зоология", "attended": 0, "total": 1, "rate": 0},
+        {"subject": "Физкультура", "attended": 1, "total": 2, "rate": 50}]
+    assert [(m["date"], m["subject"]) for m in st["missed"]] == [(DAY, "Зоология"), ("2026-09-28", "Физкультура")]
+    # Без группы — нельзя
+    nobody = await _account(database, "nobody", "Никто Никого Никакович", student=False)
+    assert (await c.get("/api/attendance/stats", headers=nobody)).status_code == 403

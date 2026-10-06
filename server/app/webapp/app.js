@@ -581,7 +581,7 @@ function dayList(lessons, now) {
         state.week.mine ? el("span", { class: "half" }, ` · ${whoText(l)}`) : null),
       el("span", { class: "r" + (l.was && "room" in l.was ? " changed" : "") }, l.room || ""),
       l.status ? el("span", { class: "row-change" }, changeText(l)) : null,
-      current ? null : attendanceLine(l, state.week.today, false, true));
+      done ? attendanceLine(l, state.week.today, false, true) : null);
   }));
 }
 
@@ -1491,6 +1491,48 @@ function semesterCard() {
     el("p", { class: "note" }, left > 0 ? `Сессия с ${end.getDate()} ${MONTHS[end.getMonth()]}` : "Сессия уже идёт — удачи! 🍀"));
 }
 
+// Своя посещаемость: всего, по предметам и пропуски
+function myAttendanceCard() {
+  if (!state.me.student) return null;
+  const head = el("div", { class: "panel-top" }, el("span", { class: "eyebrow" }, "Моя посещаемость"));
+  const card = el("section", { class: "panel" }, head, el("p", { class: "note" }, "Загрузка…"));
+  api("/api/attendance/stats").then((st) => {
+    if (!st.total) {
+      setChildren(card, head, el("p", { class: "note" },
+        "Пока не было пар с отметкой. Когда преподаватель или староста откроет отметку, здесь появится статистика."));
+      return;
+    }
+    head.append(el("span", { class: "chip" + (st.rate < 50 ? " low" : "") }, `${st.rate}%`));
+    const subjectRow = (x) => el("div", { class: "att-subject" },
+      el("span", { class: "grow" }, el("b", {}, x.subject), el("small", {}, `${x.attended} из ${x.total}`)),
+      el("span", { class: "rate" + (x.rate < 50 ? " low" : "") }, `${x.rate}%`),
+      el("div", { class: "bar" }, el("div", { style: `width:${x.rate}%` })));
+    setChildren(card, head,
+      el("div", { class: "big-line" }, el("b", {}, `${st.attended} из ${st.total}`),
+        el("span", {}, plural(st.total, "пары с отметкой", "пар с отметкой", "пар с отметкой"))),
+      el("div", { class: "bar" }, el("div", { style: `width:${st.rate}%` })),
+      ...st.subjects.slice(0, 3).map(subjectRow),
+      el("button", { class: "link-btn att-more", onclick: () => myAttendanceSheet(st, subjectRow) },
+        st.missed.length ? `Все предметы и пропуски (${st.missed.length})` : "Все предметы"));
+  }).catch((e) => setChildren(card, head, el("p", { class: "note" }, e.message)));
+  return card;
+}
+
+function myAttendanceSheet(st, subjectRow) {
+  openSheet("Моя посещаемость", `На парах: ${st.attended} из ${st.total} · ${st.rate}%`, (card) => card.append(
+    el("div", { class: "att-sheet" },
+      el("section", { class: "panel list" },
+        el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, "По предметам")),
+        ...st.subjects.map(subjectRow)),
+      st.missed.length ? el("section", { class: "panel list" },
+        el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, "Пропуски"),
+          el("span", { class: "chip muted" }, String(st.missed.length))),
+        ...st.missed.map((m) => listRow({
+          label: `${dateLabel(m.date)}${m.start ? ", " + m.start : ""}`, title: m.subject, hint: m.teacher || undefined,
+        }))) : el("p", { class: "note" }, "Пропусков нет 🎉"),
+      el("p", { class: "note" }, "Если пропуск отмечен по ошибке, напиши старосте — он может поправить отметку."))));
+}
+
 // Почта студента, куратор группы, личный кабинет МПГУ
 function universityCard() {
   const me = state.me;
@@ -1666,7 +1708,7 @@ function deleteAccount() {
 
 function renderProfile() {
   setChildren($("profile-body"),
-    profileHero(), codeCard({ compact: true }), semesterCard(), universityCard(), enterCodeCard(),
+    profileHero(), codeCard({ compact: true }), myAttendanceCard(), semesterCard(), universityCard(), enterCodeCard(),
     contactCard(), accountCard());
 }
 

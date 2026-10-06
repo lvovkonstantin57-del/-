@@ -816,3 +816,14 @@ button.att-line:active { transform: scale(.98); }
 .mark-btn.static:not(.on) .icon { opacity: .6; }
 .roster-row.as-btn { width: 100%; text-align: left; color: inherit; }
 .roster-row.as-btn:active { opacity: .6; }
+.chip.low { background: rgba(255, 59, 48, .12); color: var(--danger); }
+.att-subject { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding: 10px 0 8px; position: relative; }
+.att-subject + .att-subject::before {
+  content: ""; position: absolute; top: 0; left: 0; right: 0; height: 1px; background: var(--sep); transform: scaleY(.6);
+}
+.att-subject .grow { flex: 1; min-width: 0; }
+.att-subject .grow b { display: block; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+.att-subject .grow small { display: block; color: var(--hint); font-size: 13px; margin-top: 1px; }
+.att-subject .bar { flex-basis: 100%; height: 4px; margin: 2px 0 0; }
+.panel > .att-subject:first-of-type { margin-top: 6px; }
+.att-more { display: block; margin-top: 8px; }

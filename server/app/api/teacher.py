@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 
-from app import attendance, notify
+from app import attendance, journal, notify
 from app.api.deps import AdminDep, OwnerDep, SessionDep, TeacherDep, UserDep
 from app.api.files import attachment
 from app.models import Teacher, TeacherInvite, User
@@ -54,6 +54,12 @@ class CheckinIn(BaseModel):
 async def my_attendance(user: UserDep, s: SessionDep):
     """Пары с отметкой сегодня у моей группы: идёт ли сейчас отметка и отметился ли я."""
     return {"sessions": await attendance.student_today(s, user)}
+
+
+@api.get("/attendance/stats")
+async def my_stats(user: UserDep, s: SessionDep):
+    """Своя посещаемость: всего, по предметам, пропуски."""
+    return await journal.student_stats(s, user)
 
 
 @api.post("/attendance/checkin")

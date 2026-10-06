@@ -297,3 +297,36 @@ async def group_xlsx(s: AsyncSession, group: str) -> bytes | None:
         return None
     r = await rosters_for(s, sessions)
     return journal_xlsx(sessions, r, lambda x: x.teacher_name or "", keep=lambda st: st.group_name == group)
+
+
+# --- своя посещаемость студента --------------------------------------------------------
+
+async def student_stats(s: AsyncSession, user: User) -> dict:
+    """Посещаемость студента в его группе: всего, по предметам и какие пары пропущены (последние сначала)."""
+    if user.student is None:
+        raise AttendanceError("Посещаемость видна студентам, которые уже в группе", 403)
+    group, sid = user.group_name, user.student_id
+    r = await Rosters.load(s, {group})
+    subjects: dict[str, list[int]] = {}
+    missed = []
+    was = should = 0
+    for x in await group_sessions(s, group):
+        if sid not in {st.id for st in r.expected(x)}:
+            continue  # пара другой половины группы
+        here = any(m.student_id == sid for m in x.marks)
+        c = subjects.setdefault(x.subject, [0, 0])
+        c[1] += 1
+        should += 1
+        if here:
+            c[0] += 1
+            was += 1
+        else:
+            missed.append({"date": x.lesson_date.isoformat(), "start": x.start_time, "subject": x.subject,
+                           "teacher": x.teacher_name})
+    return {
+        "attended": was, "total": should, "rate": _rate(was, should),
+        "subjects": sorted(
+            ({"subject": name, "attended": a, "total": t, "rate": _rate(a, t)} for name, (a, t) in subjects.items()),
+            key=lambda x: (x["rate"], x["subject"])),
+        "missed": missed,
+    }
