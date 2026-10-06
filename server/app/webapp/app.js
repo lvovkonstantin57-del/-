@@ -1103,9 +1103,6 @@ async function setupNativeNotifications() {
     if (!state.me) return;
     openTab(REMINDER_KINDS.has(kind) ? "schedule" : "notifications");
   }).catch(() => {});
-  try {
-    await Plugins.BackgroundRunner?.requestPermissions?.({ apis: ["notifications"] });
-  } catch (_) { /* разрешение спросим при включении напоминаний */ }
 }
 
 // --- профиль ---------------------------------------------------------------
@@ -3020,10 +3017,13 @@ async function init() {
   if (NATIVE) root.classList.add("native", "platform-" + PLATFORM);
   window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", applyScheme);
   applyScheme();
-  if (!NATIVE && "serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+  // Service worker — только у сайта; в сборке приложения (mobile/www) его нет
+  if (!window.NativePlugins && "serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 
+  // Адрес сервера: в приложении — сохранённый или вшитый при сборке; в браузере — тот же сайт,
+  // если сборка из mobile/www не указала другой
+  SERVER = normalizeServer((NATIVE ? await store.get(SERVER_KEY) : "") || CONFIG.server || "");
   if (NATIVE) {
-    SERVER = normalizeServer((await store.get(SERVER_KEY)) || CONFIG.server || "");
     Plugins.App?.addListener("backButton", onHardwareBack);
     Plugins.App?.addListener("appStateChange", ({ isActive }) => { if (isActive) onResume(); });
     await setupNativeNotifications();
@@ -3143,7 +3143,8 @@ async function start() {
   openTab(isTeacher && !me.student ? "code" : noSchedule ? "admin" : "schedule");
   moveIndicator();
   pollInbox();
-  syncReminders(true);
+  // Разрешение на уведомления спрашиваем после входа: и для напоминаний, и для ленты в фоне
+  askNotificationPermission().then(() => syncReminders(true));
 }
 
 init();
