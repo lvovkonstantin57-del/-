@@ -39,6 +39,10 @@ WEBAPP_DIR = Path(__file__).resolve().parent.parent / "webapp"
 _check_time = schedule.check_time
 
 
+class NameIn(BaseModel):
+    full_name: str = Field(min_length=3, max_length=200)
+
+
 class SettingsIn(BaseModel):
     notify_before: int | None = Field(default=None, ge=1, le=180)
     digest_time: str | None = None
@@ -261,6 +265,29 @@ async def save_settings(body: SettingsIn, user: UserDep, s: SessionDep):
         setattr(user, field, getattr(body, field))
     await s.commit()
     return {"ok": True}
+
+
+@api.put("/me/name")
+async def change_name(body: NameIn, user: UserDep, s: SessionDep):
+    """Своё ФИО — прямо в профиле. У студента меняется и строка в списке группы; старосты получат уведомление."""
+    fio = users.person_fio(body.full_name)
+    old = user.display_name
+    if fio == old and fio == user.full_name:
+        return {"full_name": fio}
+    student = user.student
+    if student is not None:
+        await _check_name_free(s, name_key(fio), student.group_name, student.id)
+        student.full_name, student.name_key = fio, name_key(fio)
+    if user.teacher is not None:
+        user.teacher.full_name = fio
+    user.full_name = fio
+    if student is not None and fio != old:
+        starostas = [i for i in await notify.starosta_ids(s, student.group_name) if i != user.id]
+        await notify.push(s, starostas, "Студент сменил ФИО", f"{old} → {fio}\nГруппа {student.group_name}",
+                          kind=notify.KIND_GROUP, sender_id=user.id)
+    await s.commit()
+    log.info("Пользователь %s сменил ФИО", user.id)
+    return {"full_name": fio}
 
 
 @api.get("/me/plan")

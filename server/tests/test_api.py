@@ -49,13 +49,13 @@ async def test_login_rate_limit(client, database):
 async def test_change_password_logs_out_other_devices(client, database):
     acc = await register(client, "anna", "Пробная Анна Сергеевна")
     other = (await client.post("/api/auth/login", json={"login": "anna", "password": PASSWORD})).json()["token"]
-    r = await client.put("/api/me/password", headers=acc.h, json={"old_password": "bad", "new_password": "newpass1"})
+    r = await client.put("/api/me/password", headers=acc.h, json={"old_password": "bad", "new_password": "Newpass1"})
     assert r.status_code == 403
-    r = await client.put("/api/me/password", headers=acc.h, json={"old_password": PASSWORD, "new_password": "newpass1"})
+    r = await client.put("/api/me/password", headers=acc.h, json={"old_password": PASSWORD, "new_password": "Newpass1"})
     assert r.status_code == 200
     assert (await client.get("/api/me", headers=acc.h)).status_code == 200
     assert (await client.get("/api/me", headers={"Authorization": f"Bearer {other}"})).status_code == 401
-    assert (await client.post("/api/auth/login", json={"login": "anna", "password": "newpass1"})).status_code == 200
+    assert (await client.post("/api/auth/login", json={"login": "anna", "password": "Newpass1"})).status_code == 200
 
 
 async def test_delete_account_keeps_roster(client, seeded):

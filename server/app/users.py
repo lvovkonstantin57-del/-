@@ -11,7 +11,7 @@ from app.models import ROLE_USER, AuthToken, GroupInfo, Student, User
 from app.security import GROUP_CODE_LEN, PERSONAL_CODE_LEN, utcnow
 
 LOGIN_RE = re.compile(r"^[a-z0-9][a-z0-9._@+-]{2,63}$")
-PASSWORD_MIN = 6
+PASSWORD_MIN = 8
 PASSWORD_MAX = 128
 
 
@@ -34,11 +34,44 @@ def clean_fio(text: str | None) -> str | None:
     return fio if len(fio.split()) >= 2 and len(fio) <= 200 else None
 
 
-def check_password(password: str) -> None:
+# Буквы любого алфавита, дефис (Петрова-Водкина), апостроф (Д'Артаньян) и точка (инициалы)
+FIO_WORD_RE = re.compile(r"^[^\W\d_]+(?:[-'’.][^\W\d_]*)*$")
+
+
+def person_fio(text: str | None) -> str:
+    """ФИО, которое человек вводит сам: фамилия и имя обязательно, только буквы. Иначе AccountError."""
+    fio = clean_fio(text)
+    if fio is None:
+        raise AccountError("Напиши фамилию и имя — лучше полностью, с отчеством", 422)
+    if not all(FIO_WORD_RE.match(word) for word in fio.split()):
+        raise AccountError("В ФИО — только буквы и дефис, без цифр и значков", 422)
+    return fio
+
+
+def password_problems(password: str) -> list[str]:
+    """Чего не хватает паролю по обычным правилам: 8+ символов, заглавная и строчная буквы, цифра."""
+    missing = []
     if len(password) < PASSWORD_MIN:
-        raise AccountError(f"Пароль — хотя бы {PASSWORD_MIN} символов", 422)
+        missing.append(f"хотя бы {PASSWORD_MIN} символов")
+    if not any(ch.isupper() for ch in password):
+        missing.append("заглавная буква")
+    if not any(ch.islower() for ch in password):
+        missing.append("строчная буква")
+    if not any(ch.isdigit() for ch in password):
+        missing.append("цифра")
+    return missing
+
+
+def check_password(password: str, login: str | None = None) -> None:
     if len(password) > PASSWORD_MAX:
         raise AccountError("Слишком длинный пароль", 422)
+    if any(ch.isspace() for ch in password):
+        raise AccountError("Пароль без пробелов", 422)
+    missing = password_problems(password)
+    if missing:
+        raise AccountError("Пароль слишком простой. Нужны: " + ", ".join(missing), 422)
+    if login and password.casefold() == login.casefold():
+        raise AccountError("Пароль не должен совпадать с логином", 422)
 
 
 async def _unique_code(s: AsyncSession, model, column, length: int) -> str:
@@ -53,10 +86,8 @@ async def create_user(s: AsyncSession, login: str, password: str, full_name: str
     clean = clean_login(login)
     if clean is None:
         raise AccountError("Логин — от 3 символов: латиница, цифры, точка, дефис или почта", 422)
-    fio = clean_fio(full_name)
-    if fio is None:
-        raise AccountError("Напиши фамилию и имя — лучше полностью, с отчеством", 422)
-    check_password(password)
+    fio = person_fio(full_name)
+    check_password(password, clean)
     if await s.scalar(select(User.id).where(User.login == clean)):
         raise AccountError("Такой логин уже занят", 409)
     user = User(
@@ -87,7 +118,7 @@ async def issue_token(s: AsyncSession, user: User, device: str = "") -> str:
 
 async def set_password(s: AsyncSession, user: User, password: str, keep_token: str | None = None) -> None:
     """Новый пароль; со всех устройств, кроме текущего, — выход."""
-    check_password(password)
+    check_password(password, user.login)
     user.password_hash = security.hash_password(password)
     stmt = delete(AuthToken).where(AuthToken.user_id == user.id)
     if keep_token:

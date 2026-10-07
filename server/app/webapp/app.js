@@ -1641,11 +1641,42 @@ function enterCodeCard({ open = false, title = "Ввести код", hint = "к
   return el("section", { class: "panel list" }, row, form);
 }
 
+// Своё ФИО — прямо в профиле; у студента меняется и строка в списке группы
+function nameSheet() {
+  const me = state.me;
+  openSheet("ФИО", me.student ? "Так тебя видят староста и преподаватели. Староста получит уведомление о смене."
+    : "Так тебя видят в приложении.", (card, close) => {
+    const fio = fioFields(displayName(me));
+    const error = el("p", { class: "sheet-error", role: "alert" });
+    const save = el("button", { class: "btn block", type: "submit" }, "Сохранить");
+    card.append(el("form", { class: "sheet-form login-form", onsubmit: async (e) => {
+      e.preventDefault();
+      error.textContent = fio.problem() || "";
+      if (error.textContent) { hapticResult("error"); return; }
+      save.disabled = true;
+      try {
+        const r = await api("/api/me/name", { method: "PUT", body: { full_name: fio.value() } });
+        me.full_name = r.full_name;
+        if (me.student) me.student.full_name = r.full_name;
+        if (me.teacher) me.teacher.full_name = r.full_name;
+        hapticResult("success");
+        close();
+        toast("ФИО изменено");
+        renderProfile();
+        renderGreeting();
+      } catch (err) { error.textContent = err.message; hapticResult("error"); }
+      finally { save.disabled = false; }
+    } }, ...fio.nodes, error, save));
+  });
+}
+
 // Аккаунт: пароль, сервер, выход, удаление
 function accountCard() {
   const old = el("input", { type: "password", class: "full", placeholder: "Старый пароль", autocomplete: "current-password" });
-  const fresh = el("input", { type: "password", class: "full", placeholder: "Новый пароль, от 6 символов", autocomplete: "new-password" });
+  const fresh = el("input", { type: "password", class: "full", placeholder: "Новый пароль", autocomplete: "new-password" });
+  const rules = passwordRules(fresh);
   const save = el("button", { class: "btn block", onclick: async () => {
+    if (rules.problem()) { toast(rules.problem()); hapticResult("error"); return; }
     save.disabled = true;
     try {
       await api("/api/me/password", { method: "PUT", body: { old_password: old.value, new_password: fresh.value } });
@@ -1657,7 +1688,7 @@ function accountCard() {
     } catch (e) { toast(e.message); }
     finally { save.disabled = false; }
   } }, "Сменить пароль");
-  const form = el("div", { class: "contact-form", hidden: true }, old, fresh, save);
+  const form = el("div", { class: "contact-form", hidden: true }, old, fresh, rules.node, save);
   const row = listRow({ iconName: "shield", title: "Пароль", hint: `логин: ${state.me.login}`, onclick: () => {
     form.hidden = !form.hidden;
     row.classList.toggle("open", !form.hidden);
@@ -1666,6 +1697,7 @@ function accountCard() {
   const hint = installHint();
   return el("section", { class: "panel list" },
     hint ? el("div", { class: "list-pad" }, hint) : null,
+    listRow({ iconName: "edit", title: "ФИО", hint: displayName(state.me), onclick: nameSheet }),
     row, form,
     NATIVE ? listRow({ iconName: "external", title: "Сервер", hint: serverLabel(), chevron: false }) : null,
     listRow({ iconName: "logout", title: "Выйти", danger: true, chevron: false, onclick: async () => {
@@ -3434,6 +3466,58 @@ function showOnly(id) {
   window.scrollTo(0, 0);
 }
 
+// ФИО — каждое слово в своём поле. Первая буква сама становится заглавной
+const NAME_WORD = /^[\p{L}]+(?:[-'’.][\p{L}]*)*$/u;
+const capFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+function fioFields(fullName = "") {
+  const [last = "", first = "", ...rest] = fullName.split(/\s+/).filter(Boolean);
+  const make = (value, autocomplete, placeholder) => el("input", {
+    value, autocomplete, placeholder, autocapitalize: "words", spellcheck: "false", maxlength: 60 });
+  const inputs = {
+    last: make(last, "family-name", "Иванов"),
+    first: make(first, "given-name", "Иван"),
+    middle: make(rest.join(" "), "additional-name", "Иванович"),
+  };
+  const words = () => [inputs.last, inputs.first, inputs.middle].map((i) => capFirst(i.value.trim().replace(/\s+/g, " ")));
+  return {
+    inputs,
+    nodes: [
+      field("Фамилия", inputs.last),
+      field("Имя", inputs.first),
+      field("Отчество", inputs.middle, "если есть; как в списке группы"),
+    ],
+    value: () => words().filter(Boolean).join(" "),
+    // Текст ошибки или null
+    problem() {
+      const [l, f, m] = words();
+      if (!l) return "Напиши фамилию";
+      if (!f) return "Напиши имя";
+      if (![l, f, ...m.split(" ")].filter(Boolean).every((w) => NAME_WORD.test(w))) return "В ФИО — только буквы и дефис";
+      return null;
+    },
+  };
+}
+
+// Правила пароля списком: выполненные отмечаются галочкой по мере ввода
+const PASSWORD_RULES = [
+  ["хотя бы 8 символов", (v) => v.length >= 8],
+  ["заглавная буква", (v) => /\p{Lu}/u.test(v)],
+  ["строчная буква", (v) => /\p{Ll}/u.test(v)],
+  ["цифра", (v) => /\d/.test(v)],
+];
+function passwordRules(input) {
+  const items = PASSWORD_RULES.map(([label]) => el("li", {}, icon("tick"), label));
+  const node = el("ul", { class: "pass-rules", "aria-label": "Правила пароля" }, ...items);
+  const draw = () => PASSWORD_RULES.forEach(([, ok], i) => items[i].classList.toggle("ok", ok(input.value)));
+  input.addEventListener("input", draw);
+  draw();
+  return {
+    node,
+    problem: () => (/\s/.test(input.value) ? "Пароль без пробелов"
+      : PASSWORD_RULES.every(([, ok]) => ok(input.value)) ? null : "Пароль не подходит под правила"),
+  };
+}
+
 const field = (label, input, hint) => el("label", { class: "field" },
   el("span", { class: "field-label" }, label), input, hint ? el("span", { class: "field-hint" }, hint) : null);
 
@@ -3453,20 +3537,22 @@ function showLogin(mode = "login", note = "") {
     el("button", { class: "link-btn small", onclick: () => showServer() }, "изменить")) : null;
 
   if (mode === "register") {
-    const fio = el("input", { autocomplete: "name", placeholder: "Иванов Иван Иванович", autocapitalize: "words" });
+    const fio = fioFields();
     const login = el("input", { autocomplete: "username", placeholder: "латиница или почта", autocapitalize: "none",
       spellcheck: "false", inputmode: "email" });
-    const pass = el("input", { type: "password", autocomplete: "new-password", placeholder: "от 6 символов" });
+    const pass = el("input", { type: "password", autocomplete: "new-password", placeholder: "Придумай пароль" });
+    const rules = passwordRules(pass);
     const code = el("input", { autocomplete: "off", placeholder: "необязательно", autocapitalize: "characters",
       spellcheck: "false", class: "code-text" });
     const btn = el("button", { class: "btn block", type: "submit" }, "Создать аккаунт");
     const form = el("form", { class: "login-form", onsubmit: async (e) => {
       e.preventDefault();
-      error.textContent = "";
+      error.textContent = fio.problem() || rules.problem() || "";
+      if (error.textContent) { hapticResult("error"); return; }
       btn.disabled = true;
       try {
         const r = await api("/api/auth/register", { method: "POST", body: {
-          full_name: fio.value, login: login.value, password: pass.value, code: code.value.trim() || null,
+          full_name: fio.value(), login: login.value, password: pass.value, code: code.value.trim() || null,
           device: deviceName() } });
         await setToken(r.token);
         hapticResult("success");
@@ -3476,16 +3562,17 @@ function showLogin(mode = "login", note = "") {
       } catch (err) { error.textContent = err.message; hapticResult("error"); }
       finally { btn.disabled = false; }
     } },
-      field("ФИО полностью", fio, "так, как в списке группы"),
+      ...fio.nodes,
       field("Логин", login),
       field("Пароль", pass),
+      rules.node,
       field("Код группы или приглашения", code, "его даёт староста; можно ввести и потом, в профиле"),
       error, btn);
     setChildren(body, form,
       el("p", { class: "note" }, "После регистрации у тебя будет личный код. Покажи его старосте — он добавит тебя в группу."),
       el("button", { class: "link-btn", onclick: () => showLogin("login") }, "Уже есть аккаунт? Войти"),
       serverRow);
-    fio.focus();
+    fio.inputs.last.focus();
     return;
   }
 
@@ -3649,6 +3736,19 @@ function setupLiquidGlass(bar) {
 
 // --- старт -----------------------------------------------------------------
 
+// Экран загрузки с эмблемой и кружком: в приложении и на экране «Домой» — не меньше 6 секунд,
+// за это время в фоне грузится расписание. В обычной вкладке браузера — пока грузится
+const SPLASH_MIN_MS = 6000;
+function hideSplash() {
+  const box = $("splash");
+  if (!box || box.classList.contains("gone")) return;
+  const min = NATIVE || isStandalone() ? SPLASH_MIN_MS : 0;
+  setTimeout(() => {
+    box.classList.add("gone");
+    setTimeout(() => box.remove(), 600);
+  }, Math.max(0, min - performance.now()));
+}
+
 async function init() {
   const root = document.documentElement;
   root.classList.add("web");
@@ -3785,4 +3885,4 @@ async function start() {
   askNotificationPermission().then(() => syncReminders(true));
 }
 
-init();
+init().catch((e) => console.error(e)).finally(hideSplash);

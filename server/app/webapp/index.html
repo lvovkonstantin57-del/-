@@ -17,6 +17,13 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <!-- Экран загрузки: виден сразу, пока грузится приложение; app.js убирает его -->
+  <div id="splash" class="splash" role="status" aria-live="polite">
+    <span class="logo splash-logo" aria-hidden="true"></span>
+    <div class="splash-name">Расписание МПГУ</div>
+    <div class="splash-spinner" aria-hidden="true"></div>
+    <div class="splash-text">Загрузка…</div>
+  </div>
   <main>
     <section id="screen-message" class="screen message" hidden></section>
 

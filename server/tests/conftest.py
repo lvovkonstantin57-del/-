@@ -17,7 +17,7 @@ from app.importer import import_schedule, import_students  # noqa: E402
 
 SCHEDULE_HEADER = ["Группа", "День", "Неделя", "№ пары", "Начало", "Конец", "Предмет", "Тип",
                    "Аудитория", "Преподаватель"]
-PASSWORD = "parol123"
+PASSWORD = "Parol123"
 
 
 def make_xlsx(rows: list[list]) -> bytes:

@@ -52,8 +52,15 @@ def verify_password(password: str, stored: str) -> bool:
 
 
 def temp_password() -> str:
-    """Временный пароль, который староста или админ продиктует студенту: 8 символов без похожих."""
-    return "".join(secrets.choice(CODE_ALPHABET.lower()) for _ in range(8))
+    """Временный пароль, который староста или админ продиктует студенту: 8 символов без похожих,
+    первая — заглавная, есть цифры (проходит правила пароля)."""
+    letters = [ch for ch in CODE_ALPHABET if ch.isalpha()]
+    digits = [ch for ch in CODE_ALPHABET if ch.isdigit()]
+    rest = [secrets.choice(letters).lower() for _ in range(5)] + [secrets.choice(digits) for _ in range(2)]
+    for i in range(len(rest) - 1, 0, -1):  # перемешать: цифры не всегда в конце
+        j = secrets.randbelow(i + 1)
+        rest[i], rest[j] = rest[j], rest[i]
+    return secrets.choice(letters) + "".join(rest)
 
 
 # --- токены ------------------------------------------------------------------
