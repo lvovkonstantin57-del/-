@@ -93,3 +93,19 @@ async def test_wipe_attendance(database, tmp_path):
         for model in (AttendanceSession, AttendanceGroup, AttendanceMark):
             assert await s.scalar(select(func.count()).select_from(model)) == 0
         assert await s.scalar(select(func.count()).select_from(Student)) == 1  # студенты остались
+
+
+async def test_wipe_once(database, tmp_path):
+    async with database.session() as s:
+        s.add(AttendanceSession(teacher_name="Петров", subject="Химия", lesson_date=security.utcnow().date(),
+                                created_at=security.utcnow(), groups=[AttendanceGroup(group_name="ГР 1")], marks=[]))
+        await s.commit()
+    assert await wipe_attendance.wipe_once(str(tmp_path)) == 1
+    assert await wipe_attendance.count() == (0, 0)
+    # Второй запуск ничего не трогает: новые отметки остаются
+    async with database.session() as s:
+        s.add(AttendanceSession(teacher_name="Петров", subject="Химия", lesson_date=security.utcnow().date(),
+                                created_at=security.utcnow(), groups=[AttendanceGroup(group_name="ГР 1")], marks=[]))
+        await s.commit()
+    assert await wipe_attendance.wipe_once(str(tmp_path)) is None
+    assert await wipe_attendance.count() == (1, 0)

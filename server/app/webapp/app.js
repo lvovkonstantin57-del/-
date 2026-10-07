@@ -1467,7 +1467,9 @@ function profileHero() {
     el("div", { class: "profile-top" },
       el("button", { class: "avatar-btn", "aria-label": "Фото профиля", onclick: photoSheet },
         avatarNode(name, me.photo), el("span", { class: "avatar-edit" }, icon("camera"))),
-      el("div", { class: "grow" }, el("div", { class: "pname" }, name), sub ? el("div", { class: "psub" }, sub) : null)),
+      el("button", { class: "grow pname-btn", "aria-label": `ФИО: ${name}. Изменить`, onclick: () => { haptic(); nameSheet(); } },
+        el("div", { class: "pname" }, name, el("span", { class: "pname-edit" }, icon("edit"))),
+        sub ? el("div", { class: "psub" }, sub) : null)),
     tiles.length ? el("div", { class: "hero-tiles" }, ...tiles) : null,
     halfPanel);
 }

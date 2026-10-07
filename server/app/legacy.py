@@ -66,11 +66,22 @@ async def _create_schema() -> None:
     await db.engine.dispose()
 
 
+async def _keep_journal() -> None:
+    """Перенесённый журнал посещаемости — настоящий: разовая очистка пробных отметок его не трогает."""
+    from app.wipe_attendance import WIPED_ONCE
+    db.setup()
+    async with db.session() as s:
+        await db.set_setting(s, WIPED_ONCE, True)
+        await s.commit()
+    await db.engine.dispose()
+
+
 def main(argv: list[str]) -> None:
     if len(argv) != 2:
         raise SystemExit(__doc__)
     asyncio.run(_create_schema())
     counts = copy_data(argv[1], config.db_path)
+    asyncio.run(_keep_journal())
     print(f"Готово, данные перенесены в {config.db_path}:")
     for table, n in counts.items():
         print(f"  {table}: {n}")

@@ -4,7 +4,7 @@ import sys
 
 import uvicorn
 
-from app import db, jobs
+from app import db, jobs, wipe_attendance
 from app.api.routes import create_app
 from app.config import config
 
@@ -17,6 +17,7 @@ async def main() -> None:
         await db.init_db()
     except db.LegacyDatabaseError as e:
         sys.exit(str(e))
+    await wipe_attendance.wipe_once()
     if not config.owner_code:
         log.warning("OWNER_CODE не задан — главного админа назначить не получится. См. .env.example")
     server = uvicorn.Server(
