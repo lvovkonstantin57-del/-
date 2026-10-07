@@ -147,6 +147,17 @@ curl -fsSL https://raw.githubusercontent.com/lvovkonstantin57-del/-/main/install
 git pull && docker compose --profile caddy up -d --build                                       # если вручную
 ```
 
+**Автообновление.** Если сервер ставил скриптом, он обновляется сам каждую ночь в 04:30 по Москве — но только когда на GitHub есть новая версия; иначе ничего не перезапускается. Делает это systemd-таймер `raspisanie-update.timer`:
+
+```bash
+systemctl list-timers raspisanie-update.timer    # когда следующий запуск
+systemctl start raspisanie-update                # обновить прямо сейчас
+tail -n 30 /var/log/raspisanie-update.log        # журнал обновлений
+systemctl disable --now raspisanie-update.timer  # выключить
+```
+
+Ставить без автообновления: `NO_AUTOUPDATE=1` перед `bash` в команде установки.
+
 Каждую ночь в 04:00 сервер сохраняет копию базы в `/data/backups` внутри тома (хранятся последние 14). Главный админ может скачать бэкап в приложении: «Команда» → «Скачать бэкап базы».
 
 **Восстановить из бэкапа:**

@@ -20,6 +20,8 @@
 #                                или первый свободный после него)
 #   NO_IMPORT=1                  не переносить данные Telegram-бота; IMPORT_BOT=1 — перенести
 #                                и при повторном запуске (только в пустую базу)
+#   NO_AUTOUPDATE=1              не обновляться самому каждую ночь (по умолчанию — обновляется
+#                                в 04:30 по Москве, если на GitHub есть новая версия)
 #   INSTALL_DIR, REPO_URL, BRANCH — откуда и куда ставить
 
 set -euo pipefail
@@ -369,6 +371,56 @@ wait_ready() {
   «Сетевая безопасность» или похожий — и запусти установку ещё раз."
 }
 
+# Ночное автообновление: systemd-таймер раз в сутки запускает update.sh, а тот — install.sh,
+# если на GitHub новая версия. 04:30 по Москве — после ночного бэкапа базы в 04:00
+UPDATE_TIME="04:30"
+setup_autoupdate() {
+  if [ ! -d /run/systemd/system ] || ! command -v systemctl >/dev/null; then
+    warn "systemd нет — автообновление не включено, обновляй этой же командой вручную"
+    return 0
+  fi
+  local timer=/etc/systemd/system/raspisanie-update.timer service=/etc/systemd/system/raspisanie-update.service
+  if [ -n "${NO_AUTOUPDATE:-}" ]; then
+    if [ -f "$timer" ]; then
+      systemctl disable --now raspisanie-update.timer >/dev/null 2>&1 || true
+      rm -f "$timer" "$service" /usr/local/bin/raspisanie-update
+      systemctl daemon-reload
+      say "Автообновление выключено"
+    fi
+    return 0
+  fi
+  say "Включаю автообновление: каждую ночь в $UPDATE_TIME по Москве"
+  install -m 755 "$DIR/update.sh" /usr/local/bin/raspisanie-update
+  cat > "$service" <<UNIT
+[Unit]
+Description=Обновление сервера «Расписание МПГУ» с GitHub
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=INSTALL_DIR=$DIR BRANCH=$BRANCH REPO_URL=$REPO_URL HOME=/root
+ExecStart=/usr/local/bin/raspisanie-update
+StandardOutput=append:/var/log/raspisanie-update.log
+StandardError=append:/var/log/raspisanie-update.log
+TimeoutStartSec=45min
+UNIT
+  cat > "$timer" <<UNIT
+[Unit]
+Description=Каждую ночь — обновление сервера «Расписание МПГУ»
+
+[Timer]
+OnCalendar=*-*-* $UPDATE_TIME:00 Europe/Moscow
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
+UNIT
+  systemctl daemon-reload
+  systemctl enable --now raspisanie-update.timer >/dev/null
+}
+
 summary() {
   local domain
   domain=$(get_env DOMAIN)
@@ -387,7 +439,12 @@ summary() {
   printf '  1. Открой https://%s в браузере или приложение на телефоне и зарегистрируйся.\n' "$domain"
   printf '  2. Введи код главного админа в поле «Есть код группы?» (или «Профиль → Ввести код»).\n\n'
   printf '  Код хранится в %s/server/.env — никому его не отправляй.\n' "$DIR"
-  printf '  Обновить сервер:  запусти эту же команду ещё раз\n'
+  if systemctl is-enabled raspisanie-update.timer >/dev/null 2>&1; then
+    printf '  Автообновление:   каждую ночь в %s по Москве, если на GitHub есть новая версия\n' "$UPDATE_TIME"
+    printf '                    журнал: /var/log/raspisanie-update.log\n'
+    printf '                    выключить: systemctl disable --now raspisanie-update.timer\n'
+  fi
+  printf '  Обновить сейчас:  запусти эту же команду ещё раз\n'
   printf '  Логи:             cd %s/server && docker compose logs -f app\n\n' "$DIR"
 }
 
@@ -406,6 +463,7 @@ main() {
   start_server
   if [ "$MODE" = host-caddy ]; then configure_host_caddy; fi
   wait_ready
+  setup_autoupdate
   summary
 }
 
