@@ -148,3 +148,17 @@ async def test_bad_names_cleanup(client, database, tmp_path):
         logins = set((await s.scalars(select(users.User.login))).all())
     assert logins == {boss.me["login"], "good"}
     assert (await bad_names.run(False)) == ["Аккаунтов с неправильным ФИО нет."]
+
+
+@pytest.mark.parametrize("module", ["app.wipe_attendance", "app.bad_names"])
+def test_cli_commands_run(module, tmp_path):
+    """Команды запускаются так же, как на сервере: python -m … — сами подключаются к базе."""
+    import os
+    import subprocess
+    import sys
+    env = {**os.environ, "DB_PATH": str(tmp_path / "app.db"), "BACKUP_DIR": str(tmp_path / "backups")}
+    for args in ([], ["--yes"]):
+        r = subprocess.run([sys.executable, "-m", module, *args], env=env, capture_output=True, text=True,
+                           cwd=os.path.dirname(os.path.dirname(__file__)), timeout=60)
+        assert r.returncode == 0, r.stderr
+        assert r.stdout.strip()

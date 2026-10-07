@@ -64,13 +64,14 @@ async def run(confirm: bool) -> None:
     await db.init_db()
     if not confirm:
         sessions, marks = await count()
-        print(f"В журнале {sessions} пар с отметкой и {marks} отметок студентов.")
+        print(f"В журнале — пар с отметкой: {sessions}, отметок студентов: {marks}.")
         print("Чтобы удалить их, запусти с --yes")
         return
     sessions, marks, path = await wipe()
-    print(f"Удалено: {sessions} пар с отметкой и {marks} отметок студентов.")
+    print(f"Удалено — пар с отметкой: {sessions}, отметок студентов: {marks}.")
     print(f"Копия базы до удаления: {path}")
 
 
 if __name__ == "__main__":
+    db.setup()
     asyncio.run(run("--yes" in sys.argv[1:]))

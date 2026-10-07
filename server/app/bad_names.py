@@ -67,5 +67,6 @@ async def run(confirm: bool, backup_dir: str | None = None) -> list[str]:
 
 
 if __name__ == "__main__":
+    db.setup()
     for line in asyncio.run(run("--yes" in sys.argv[1:])):
         print(line)
