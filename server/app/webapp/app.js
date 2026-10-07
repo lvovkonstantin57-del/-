@@ -1694,7 +1694,6 @@ function accountCard() {
     hint ? el("section", { class: "panel" }, hint) : null,
     el("section", { class: "panel list" },
       el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, "Аккаунт")),
-      listRow({ iconName: "edit", title: "ФИО", hint: displayName(state.me), onclick: nameSheet }),
       row, form,
       NATIVE ? listRow({ iconName: "external", title: "Сервер", hint: serverLabel(), chevron: false }) : null,
       listRow({ iconName: "logout", title: "Выйти", danger: true, chevron: false, onclick: async () => {
