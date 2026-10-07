@@ -1820,8 +1820,9 @@ function adminDashboard(box, st) {
     ["bell", "Объявление", "сообщение группам", announceBlock],
     ["clock", "Семестр и ЛК", "звонки, сессия, ссылка", configBlock],
     ["user", "Кураторы", "контакт для каждой группы", curatorBlock],
-    ["checkCircle", "Посещаемость", "журнал", () => attendanceBlock()],
+    ["checkCircle", "Посещаемость", "явка групп, Excel", () => attendanceBlock()],
     ["shield", "Команда", `${countOf(st.admins, "админ", "админа", "админов")} · ${countOf(st.teachers, "преподаватель", "преподавателя", "преподавателей")}`, teamBlock],
+    ["file", "Журнал отметок", "все пары с отметками, удаление", marksJournalBlock],
   ];
   setChildren(box,
     pageHead("Я админ", `${role[0].toUpperCase()}${role.slice(1)} · ${countOf(state.groups.length, "группа", "группы", "групп")}`),
@@ -2842,6 +2843,56 @@ function attendanceBlock(group) {
   return block("Посещаемость", box, load, { bare: true });
 }
 
+// Админ: все пары с отметками по всем группам — посмотреть, кто был, и удалить лишние
+function marksJournalBlock() {
+  const box = el("div", { class: "stackv" }, loadingNote());
+  const isOwner = state.me.role === "owner";
+  let group = "";
+  const picker = el("select", { class: "full", "aria-label": "Группа", onchange: (e) => { group = e.target.value; load(); } },
+    el("option", { value: "" }, "Все группы"), ...(state.groups || []).map((g) => el("option", { value: g }, formatGroup(g))));
+  async function remove(x, btn) {
+    const text = x.by_teacher
+      ? `Удалить «${x.subject}» (${dateLabel(x.date)}) из журнала? Отметки преподавателя тоже пропадут.`
+      : `Удалить «${x.subject}» (${dateLabel(x.date)}) из журнала?`;
+    if (!(await confirmDialog(text, "Удалить"))) return;
+    btn.disabled = true;
+    try {
+      await api(`/api/admin/attendance/${x.id}`, { method: "DELETE" });
+      hapticResult("success");
+      toast("Удалено");
+      load();
+    } catch (e) { toast(e.message); btn.disabled = false; }
+  }
+  async function load() {
+    setChildren(box, picker, loadingNote());
+    let list;
+    try { list = (await api("/api/admin/attendance/all" + (group ? "?group=" + encodeURIComponent(group) : ""))).sessions; }
+    catch (e) { setChildren(box, picker, errorNote(e)); return; }
+    const byDate = new Map();
+    for (const x of list) {
+      if (!byDate.has(x.date)) byDate.set(x.date, []);
+      byDate.get(x.date).push(x);
+    }
+    const row = (x) => el("div", { class: "journal-row" },
+      el("button", { class: "grow journal-open", onclick: () => attendanceSheet(x.groups[0], x.date, x, { sessionId: x.id, onchange: load }) },
+        el("small", {}, [x.start ? `${x.start}–${x.end}` : `в ${x.started_at}`, x.open && "идёт отметка"].filter(Boolean).join(" · ")),
+        el("b", {}, x.subject),
+        el("span", { class: "hint" }, `${groupsText(x.groups, x.half)} · ${x.by_teacher ? x.teacher || "преподаватель" : "отметка старосты"}`)),
+      el("span", { class: "value" }, `${x.present}/${x.total}`),
+      x.deletable ? el("button", { class: "icon-btn danger", "aria-label": `Удалить: ${x.subject}`,
+        onclick: (e) => remove(x, e.currentTarget) }, icon("trash")) : null);
+    setChildren(box, picker,
+      el("p", { class: "page-note" }, list.length
+        ? `${countOf(list.length, "пара", "пары", "пар")} с отметками. Нажми на пару — кто был; корзина — удалить.`
+        : "Пар с отметками нет."),
+      ...[...byDate].map(([date, items]) => el("section", { class: "panel list" },
+        el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, dateLabel(date)), el("span", { class: "chip muted" }, String(items.length))),
+        ...items.map(row))),
+      isOwner ? wipePanel(group || null, load) : null);
+  }
+  return block("Журнал отметок", box, load, { bare: true });
+}
+
 // Только главному админу: удалить пары с отметками группы или во всех группах сразу
 function wipePanel(group, reload) {
   const run = async (question, call, done) => {
@@ -2855,10 +2906,10 @@ function wipePanel(group, reload) {
   };
   return el("section", { class: "panel list" },
     el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, "Удаление отметок")),
-    listRow({ iconName: "trash", title: `Удалить все отметки — ${formatGroup(group)}`, danger: true, chevron: false,
+    group ? listRow({ iconName: "trash", title: `Удалить все отметки — ${formatGroup(group)}`, danger: true, chevron: false,
       onclick: () => run(`Удалить все пары с отметками группы ${formatGroup(group)}? Вернуть их не получится.`,
         () => api("/api/admin/attendance?group=" + encodeURIComponent(group), { method: "DELETE" }),
-        (r) => `Удалено пар: ${r.sessions}`) }),
+        (r) => `Удалено пар: ${r.sessions}`) }) : null,
     listRow({ iconName: "trash", title: "Удалить все отметки во всех группах", danger: true, chevron: false,
       onclick: () => run("Удалить весь журнал посещаемости во всех группах? Перед удалением сервер сохранит копию базы.",
         () => api("/api/admin/attendance/wipe", { method: "POST" }),

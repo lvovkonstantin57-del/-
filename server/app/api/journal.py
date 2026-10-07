@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field, field_validator
 
 from app import attendance, db, journal, wipe_attendance
-from app.api.deps import OwnerDep, SessionDep, StaffDep, check_group
+from app.api.deps import AdminDep, OwnerDep, SessionDep, StaffDep, check_group
 from app.api.files import attachment
 from app.api.teacher import XLSX, MarkIn
 from app.importer import clean_group
@@ -44,6 +44,12 @@ async def export_group(group: str, user: StaffDep, s: SessionDep):
         raise HTTPException(400, "В журнале группы пока нет пар")
     day = attendance.local_now().strftime("%d.%m.%Y")
     return attachment(data, f"Посещаемость {group} {day}.xlsx", XLSX)
+
+
+@api.get("/all")
+async def all_sessions(admin: AdminDep, s: SessionDep, group: str | None = None):
+    """Все пары с отметками (или одной группы) — плитка «Журнал отметок» у админа."""
+    return {"sessions": await journal.all_sessions(s, admin, group or None)}
 
 
 @api.post("")

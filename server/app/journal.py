@@ -277,6 +277,22 @@ async def staff_detail(s: AsyncSession, user: User, x: AttendanceSession) -> dic
     return d
 
 
+# --- все пары с отметками (админ) --------------------------------------------------
+
+async def all_sessions(s: AsyncSession, user: User, group: str | None = None, limit: int = 500) -> list[dict]:
+    """Пары с отметками всех групп (или одной), новые сверху — чтобы просмотреть и удалить лишнее."""
+    stmt = (select(AttendanceSession)
+            .order_by(AttendanceSession.lesson_date.desc(), AttendanceSession.start_time.desc(),
+                      AttendanceSession.created_at.desc())
+            .limit(limit))
+    if group:
+        stmt = stmt.join(AttendanceGroup).where(AttendanceGroup.group_name == group)
+    sessions = list((await s.scalars(stmt)).unique().all())
+    r = await rosters_for(s, sessions)
+    return [{**attendance.session_brief(x, r), "by_teacher": x.opened_by is None, "deletable": can_delete(user, x)}
+            for x in sessions]
+
+
 # --- журнал группы -------------------------------------------------------------------
 
 async def group_journal(s: AsyncSession, user: User, group: str) -> dict:

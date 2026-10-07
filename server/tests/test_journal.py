@@ -277,3 +277,22 @@ async def test_owner_deletes_attendance(c, database, monkeypatch, tmp_path):
     # Одну пару преподавателя главный админ удаляет из шторки
     again = (await c.post("/api/teacher/sessions", headers=t, json={"groups": ["ГР 1"], "subject": "Зоология"})).json()
     assert (await c.delete(f"/api/admin/attendance/{again['id']}", headers=boss)).json() == {"ok": True}
+
+
+async def test_admin_lists_all_sessions(c, database):
+    from app.models import ROLE_ADMIN, ROLE_OWNER
+    star = await _account(database, "star", "Тестов Тест Тестович", role=ROLE_STAROSTA)
+    admin = await _account(database, "adm", "Админов Админ Админович", student=False, role=ROLE_ADMIN)
+    boss = await _account(database, "boss", "Главный Админ Админович", student=False, role=ROLE_OWNER)
+    t = await _teacher(database)
+    mine = (await c.post("/api/admin/attendance", headers=star,
+                         json={"group": "ГР 1", "date": DAY, "start": "09:00", "subject": "Физкультура"})).json()
+    lecture = (await c.post("/api/teacher/sessions", headers=t, json={
+        "groups": ["ГР 1"], "subject": "Зоология", "start": "10:40", "end": "12:10"})).json()
+    assert (await c.get("/api/admin/attendance/all", headers=star)).status_code == 403
+    rows = (await c.get("/api/admin/attendance/all", headers=admin)).json()["sessions"]
+    assert {x["id"]: (x["subject"], x["by_teacher"], x["deletable"]) for x in rows} == {
+        mine["id"]: ("Физкультура", False, True), lecture["id"]: ("Зоология", True, False)}
+    rows = (await c.get("/api/admin/attendance/all", headers=boss)).json()["sessions"]
+    assert all(x["deletable"] for x in rows) and rows[0]["groups"] == ["ГР 1"]
+    assert (await c.get("/api/admin/attendance/all", params={"group": "ГР 2"}, headers=boss)).json() == {"sessions": []}
