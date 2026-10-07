@@ -1,5 +1,5 @@
 // Service worker: приложение открывается без сети, свежая версия — всегда, когда сеть есть.
-const CACHE = "mpgu-schedule-v10";
+const CACHE = "mpgu-schedule-v11";
 const SHELL = [
   "/", "/style.css", "/app.js", "/logo.png", "/manifest.webmanifest",
   "/icon-192.png", "/icon-512.png", "/apple-touch-icon.png",

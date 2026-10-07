@@ -1689,18 +1689,21 @@ function accountCard() {
     row.classList.toggle("open", !form.hidden);
     haptic();
   } });
+  return el("section", { class: "panel list" },
+    el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, "Аккаунт")),
+    row, form,
+    NATIVE ? listRow({ iconName: "external", title: "Сервер", hint: serverLabel(), chevron: false }) : null,
+    listRow({ iconName: "logout", title: "Выйти", danger: true, chevron: false, onclick: async () => {
+      if (!(await confirmDialog("Выйти из аккаунта на этом устройстве?", "Выйти"))) return;
+      await logout();
+    } }),
+    listRow({ iconName: "trash", title: "Удалить аккаунт", danger: true, chevron: false, onclick: deleteAccount }));
+}
+
+// Подсказка «Установи на экран „Домой“» — всегда в самом низу профиля
+function installCard() {
   const hint = installHint();
-  return el("div", { class: "stackv" },
-    hint ? el("section", { class: "panel" }, hint) : null,
-    el("section", { class: "panel list" },
-      el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, "Аккаунт")),
-      row, form,
-      NATIVE ? listRow({ iconName: "external", title: "Сервер", hint: serverLabel(), chevron: false }) : null,
-      listRow({ iconName: "logout", title: "Выйти", danger: true, chevron: false, onclick: async () => {
-        if (!(await confirmDialog("Выйти из аккаунта на этом устройстве?", "Выйти"))) return;
-        await logout();
-      } }),
-      listRow({ iconName: "trash", title: "Удалить аккаунт", danger: true, chevron: false, onclick: deleteAccount })));
+  return hint ? el("section", { class: "panel" }, hint) : null;
 }
 
 async function logout() {
@@ -1737,7 +1740,7 @@ function deleteAccount() {
 function renderProfile() {
   setChildren($("profile-body"),
     profileHero(), codeCard({ compact: true }), myAttendanceCard(), semesterCard(), universityCard(), enterCodeCard(),
-    contactCard(), accountCard());
+    contactCard(), accountCard(), installCard());
 }
 
 // --- «Я админ» и «Я староста» ------------------------------------------------------
