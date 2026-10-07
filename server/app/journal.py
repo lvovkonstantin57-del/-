@@ -17,7 +17,7 @@ from app.attendance import (
     CODE_TTL, AttendanceError, Rosters, _new_code, _rate, code_left, is_open, journal_xlsx, local_hhmm,
     rosters_for, session_detail, utcnow,
 )
-from app.models import AttendanceGroup, AttendanceSession, Teacher, User
+from app.models import AttendanceGroup, AttendanceSession, Student, Teacher, User
 
 log = logging.getLogger(__name__)
 
@@ -85,6 +85,26 @@ def can_view(user: User, x: AttendanceSession) -> bool:
 def can_edit(user: User, x: AttendanceSession) -> bool:
     """Староста правит только свои отметки; у пары преподавателя журнал ведёт преподаватель."""
     return x.opened_by is not None and bool(x.groups) and all(user.can_manage(g) for g in x.group_names)
+
+
+def can_delete(user: User, x: AttendanceSession) -> bool:
+    """Удалить пару из журнала: свою отметку — староста, любую (и преподавателя) — главный админ."""
+    return user.is_owner or can_edit(user, x)
+
+
+async def delete_group_sessions(s: AsyncSession, group: str) -> int:
+    """Все отметки группы. Общая пара нескольких групп (лекция) остаётся у остальных —
+    из неё уходят только эта группа и отметки её студентов. Вернёт, у скольких пар убрали группу."""
+    sessions = await group_sessions(s, group)
+    ids = set((await s.scalars(select(Student.id).where(Student.group_name == group))).all())
+    for x in sessions:
+        if x.group_names == [group]:
+            await s.delete(x)
+            continue
+        x.groups = [g for g in x.groups if g.group_name != group]
+        x.marks = [m for m in x.marks if m.student_id not in ids]
+    await s.commit()
+    return len(sessions)
 
 
 def group_count(x: AttendanceSession, r: Rosters, group: str) -> tuple[int, int]:
@@ -251,7 +271,7 @@ async def staff_detail(s: AsyncSession, user: User, x: AttendanceSession) -> dic
     roster = [p for p in d["roster"] if user.can_manage(p["group"])]
     editable = can_edit(user, x)
     d.update(roster=roster, present=sum(p["present"] for p in roster), total=len(roster),
-             editable=editable, by_teacher=x.opened_by is None)
+             editable=editable, deletable=can_delete(user, x), by_teacher=x.opened_by is None)
     if not editable:
         d.update(code=None, expires_in=0)
     return d

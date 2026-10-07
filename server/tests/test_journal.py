@@ -12,7 +12,7 @@ from app import attendance, journal, users
 from app.api.routes import create_app
 from app.config import config
 from app.importer import import_schedule, import_students
-from app.models import ROLE_STAROSTA, AttendanceSession, Student, Teacher, User
+from app.models import ROLE_STAROSTA, AttendanceGroup, AttendanceSession, Student, Teacher, User
 from tests.conftest import PASSWORD
 
 # Понедельник чётной недели, 10:50: физкультура (9:00) прошла, зоология (10:40) идёт
@@ -234,3 +234,46 @@ async def test_student_sees_own_attendance(c, database):
     # Без группы — нельзя
     nobody = await _account(database, "nobody", "Никто Никого Никакович", student=False)
     assert (await c.get("/api/attendance/stats", headers=nobody)).status_code == 403
+
+
+async def test_owner_deletes_attendance(c, database, monkeypatch, tmp_path):
+    from app import backup
+    from app.models import ROLE_OWNER
+    real_save = backup.save_backup
+    monkeypatch.setattr(backup, "save_backup", lambda now, directory=None: real_save(now, str(tmp_path)))
+    star = await _account(database, "star", "Тестов Тест Тестович", role=ROLE_STAROSTA)
+    boss = await _account(database, "boss", "Главный Админ Админович", student=False, role=ROLE_OWNER)
+    t = await _teacher(database)
+    # Общая лекция преподавателя у двух групп и отметка старосты
+    async with database.session() as s:
+        uid = await s.scalar(select(User.id).where(User.login == "sidorov"))
+        x = AttendanceSession(teacher_id=uid, teacher_name="Сидоров С. С.", subject="Зоология",
+                              lesson_date=MONDAY.date(), start_time="10:40", end_time="12:10",
+                              created_at=attendance.utcnow(), closed_at=attendance.utcnow(),
+                              groups=[AttendanceGroup(group_name="ГР 1"), AttendanceGroup(group_name="ГР 2")], marks=[])
+        s.add(x)
+        await s.commit()
+        lecture = {"id": x.id}
+    mine = (await c.post("/api/admin/attendance", headers=star,
+                         json={"group": "ГР 1", "date": DAY, "start": "09:00", "subject": "Физкультура"})).json()
+    # Пару преподавателя староста удалить не может, главный админ — может
+    assert (await c.get(f"/api/admin/attendance/{lecture['id']}", headers=star)).json()["deletable"] is False
+    assert (await c.get(f"/api/admin/attendance/{lecture['id']}", headers=boss)).json()["deletable"] is True
+    assert (await c.delete(f"/api/admin/attendance/{lecture['id']}", headers=star)).status_code == 403
+    # Разом — только главный админ
+    assert (await c.delete("/api/admin/attendance", params={"group": "ГР 1"}, headers=star)).status_code == 403
+    assert (await c.post("/api/admin/attendance/wipe", headers=star)).status_code == 403
+    # Отметки ГР 1: своя пара удаляется, общая лекция остаётся у ГР 2
+    r = await c.delete("/api/admin/attendance", params={"group": "ГР 1"}, headers=boss)
+    assert r.json() == {"sessions": 2}
+    async with database.session() as s:
+        rows = (await s.scalars(select(AttendanceSession))).all()
+        assert [(x.id, x.group_names) for x in rows] == [(lecture["id"], ["ГР 2"])]
+    assert mine["id"] not in [x.id for x in rows]
+    # Весь журнал
+    r = await c.post("/api/admin/attendance/wipe", headers=boss)
+    assert r.json() == {"sessions": 1, "marks": 0}
+    assert list(tmp_path.glob("schedule-backup-*.db"))
+    # Одну пару преподавателя главный админ удаляет из шторки
+    again = (await c.post("/api/teacher/sessions", headers=t, json={"groups": ["ГР 1"], "subject": "Зоология"})).json()
+    assert (await c.delete(f"/api/admin/attendance/{again['id']}", headers=boss)).json() == {"ok": True}

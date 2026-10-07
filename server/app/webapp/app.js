@@ -1820,7 +1820,7 @@ function adminDashboard(box, st) {
     ["bell", "Объявление", "сообщение группам", announceBlock],
     ["clock", "Семестр и ЛК", "звонки, сессия, ссылка", configBlock],
     ["user", "Кураторы", "контакт для каждой группы", curatorBlock],
-    ["checkCircle", "Посещаемость", "журнал групп, Excel", () => attendanceBlock()],
+    ["checkCircle", "Посещаемость", "журнал", () => attendanceBlock()],
     ["shield", "Команда", `${countOf(st.admins, "админ", "админа", "админов")} · ${countOf(st.teachers, "преподаватель", "преподавателя", "преподавателей")}`, teamBlock],
   ];
   setChildren(box,
@@ -2748,8 +2748,10 @@ function attendanceSheet(group, iso, lesson, { sessionId = lesson.attendance?.se
         if (r) haptic();
         show(r || d);
       } : null;
-      const remove = d.editable ? el("button", { class: "link-btn small danger-text att-remove", onclick: async () => {
-        if (!(await confirmDialog("Удалить отметку этой пары? Она пропадёт из журнала группы.", "Удалить"))) return;
+      const remove = d.deletable ? el("button", { class: "link-btn small danger-text att-remove", onclick: async () => {
+        if (!(await confirmDialog(d.by_teacher
+          ? "Удалить эту пару из журнала? Отметки, которые сделал преподаватель, тоже пропадут."
+          : "Удалить отметку этой пары? Она пропадёт из журнала группы.", "Удалить"))) return;
         if (await call(`/api/admin/attendance/${d.id}`, { method: "DELETE" })) { toast("Отметка удалена"); close(); }
       } }, "Удалить отметку") : null;
       setChildren(body,
@@ -2834,9 +2836,33 @@ function attendanceBlock(group) {
           try { await saveFile(await apiFile("/api/admin/attendance/export?group=" + encodeURIComponent(current))); hapticResult("success"); }
           catch (e) { toast(e.message); }
         },
-      })) : null);
+      })) : null,
+      state.me.role === "owner" ? wipePanel(current, load) : null);
   }
   return block("Посещаемость", box, load, { bare: true });
+}
+
+// Только главному админу: удалить пары с отметками группы или во всех группах сразу
+function wipePanel(group, reload) {
+  const run = async (question, call, done) => {
+    if (!(await confirmDialog(question, "Удалить"))) return;
+    try {
+      const r = await call();
+      hapticResult("success");
+      toast(done(r));
+      reload();
+    } catch (e) { toast(e.message); }
+  };
+  return el("section", { class: "panel list" },
+    el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, "Удаление отметок")),
+    listRow({ iconName: "trash", title: `Удалить все отметки — ${formatGroup(group)}`, danger: true, chevron: false,
+      onclick: () => run(`Удалить все пары с отметками группы ${formatGroup(group)}? Вернуть их не получится.`,
+        () => api("/api/admin/attendance?group=" + encodeURIComponent(group), { method: "DELETE" }),
+        (r) => `Удалено пар: ${r.sessions}`) }),
+    listRow({ iconName: "trash", title: "Удалить все отметки во всех группах", danger: true, chevron: false,
+      onclick: () => run("Удалить весь журнал посещаемости во всех группах? Перед удалением сервер сохранит копию базы.",
+        () => api("/api/admin/attendance/wipe", { method: "POST" }),
+        (r) => `Удалено пар: ${r.sessions}, отметок: ${r.marks}`) }));
 }
 
 // Какие пары студент пропустил — нажать, чтобы открыть пару
