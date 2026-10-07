@@ -43,8 +43,11 @@ def person_fio(text: str | None) -> str:
     fio = clean_fio(text)
     if fio is None:
         raise AccountError("Напиши фамилию и имя — лучше полностью, с отчеством", 422)
-    if not all(FIO_WORD_RE.match(word) for word in fio.split()):
+    words = fio.split()
+    if not all(FIO_WORD_RE.match(word) for word in words):
         raise AccountError("В ФИО — только буквы и дефис, без цифр и значков", 422)
+    if any(sum(ch.isalpha() for ch in word) < 2 for word in words[:2]):
+        raise AccountError("Фамилию и имя — полностью, не инициалами", 422)
     return fio
 
 

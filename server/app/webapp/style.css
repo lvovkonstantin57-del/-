@@ -867,3 +867,14 @@ button.att-line:active { transform: scale(.98); }
 .pname-btn:active { background: rgba(255, 255, 255, .14); }
 .pname-edit { display: inline-grid; place-items: center; width: 24px; height: 24px; margin-left: 6px; border-radius: 50%; background: rgba(255, 255, 255, .18); vertical-align: 2px; }
 .pname-edit .icon { width: 13px; height: 13px; stroke-width: 2.4; }
+
+/* Тип пары на карточке «Сейчас» — отдельно от преподавателя */
+.hero-kind {
+  display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 4px 10px; border-radius: 10px;
+  background: rgba(255, 255, 255, .16); font-size: 14px; font-weight: 600;
+}
+.hero-kind .icon { width: 16px; height: 16px; stroke-width: 1.8; }
+/* Сегодня: прошедшие пары приглушены, текущая обведена */
+.lesson-card.done .lc-subject, .lesson-card.done .lc-top b { color: var(--hint); }
+.lesson-card.now { box-shadow: inset 0 0 0 2px var(--accent); }
+.lesson-card.now .lc-top span { color: var(--accent-ink); font-weight: 700; }

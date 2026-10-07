@@ -840,6 +840,37 @@ async def download_backup(owner: OwnerDep):
 mimetypes.add_type("application/manifest+json", ".webmanifest")
 
 
+# Скрипты и запросы — только со своего сайта: даже если в текст (ФИО, объявление) пролезет
+# чужой <script>, браузер его не запустит и токен входа никуда не уйдёт
+CSP = "; ".join((
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "connect-src 'self'",
+    "font-src 'self'",
+    "manifest-src 'self'",
+    "worker-src 'self'",
+    "object-src 'none'",
+    "base-uri 'none'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+))
+LONG_CACHE = (".png", ".jpg", ".jpeg", ".svg", ".ico", ".webp", ".woff2")
+
+
+def cache_policy(path: str, versioned: bool) -> str:
+    """API — не хранить; картинки и app.js?v=… — надолго (адрес меняется при обновлении);
+    остальное (index.html, sw.js) — каждый раз сверять с сервером."""
+    if path.startswith("/api/"):
+        return "no-store"
+    if versioned:
+        return "public, max-age=31536000, immutable"
+    if path.endswith(LONG_CACHE):
+        return "public, max-age=2592000"  # 30 дней
+    return "no-cache"
+
+
 def index_html() -> str:
     """index.html со ссылками вида app.js?v=<хэш>: после обновления адрес меняется,
     и браузер не покажет старую копию из кэша."""
@@ -876,13 +907,15 @@ def create_app() -> FastAPI:
         return JSONResponse({"detail": str(e)}, status_code=e.status)
 
     @app.middleware("http")
-    async def no_stale_cache(request: Request, call_next):
-        # Без этого заголовка браузер сам решает, сколько хранить файл, и после
-        # обновления может часами показывать старый интерфейс
+    async def headers(request: Request, call_next):
         response = await call_next(request)
+        path = request.url.path
         if "cache-control" not in response.headers:
-            api_path = request.url.path.startswith("/api/")
-            response.headers["Cache-Control"] = "no-store" if api_path else "no-cache"
+            response.headers["Cache-Control"] = cache_policy(path, "v" in request.query_params)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        if not path.startswith("/api/"):
+            response.headers.setdefault("Content-Security-Policy", CSP)
+            response.headers.setdefault("Referrer-Policy", "same-origin")
         return response
 
     @app.get("/healthz")

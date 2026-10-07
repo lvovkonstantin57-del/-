@@ -529,10 +529,11 @@ function heroCard(l, mode, now) {
       el("b", { class: "room" }, l.room)));
   }
   const who = whoText(l);
-  if (who || l.kind) {
+  if (who) {
     tiles.push(el("div", { class: "hero-tile grow" },
-      el("small", {}, who ? l.kind || (state.week.mine ? "подгруппы" : "преподаватель") : "тип"), el("b", {}, who || l.kind)));
+      el("small", {}, state.week.mine ? "подгруппы" : "преподаватель"), el("b", {}, who)));
   }
+  const kind = kindIcon(l.kind);
   const foot = mode === "now"
     ? el("div", { class: "hero-progress" },
       el("div", { class: "track" }, el("div", { class: "fill", style: `width:${Math.round(((now - start) / (end - start)) * 100)}%` })),
@@ -542,6 +543,7 @@ function heroCard(l, mode, now) {
     el("div", { class: "hero-top" },
       el("span", {}, (mode === "now" ? "Сейчас" : "Следующая") + pair), el("span", { class: "num" }, `${l.start}–${l.end}`)),
     el("div", { class: "hero-subject" }, l.subject),
+    l.kind ? el("div", { class: "hero-kind" }, kind ? icon(kind) : null, l.kind) : null,
     halfNote(l) ? el("div", { class: "hero-half" }, `Только ${halfNote(l)} группы`) : null,
     changeText(l) ? el("div", { class: "hero-change" }, changeText(l)) : null,
     tiles.length ? el("div", { class: "hero-tiles" }, ...tiles) : null,
@@ -571,20 +573,6 @@ function doneCard(day) {
       `Завтра к ${first.start} — ${first.subject}${first.room ? ", " + roomText(first.room) : ""}`) : null);
 }
 
-function dayList(lessons, now) {
-  return el("section", { class: "card day-list" }, ...lessons.map((l) => {
-    const done = toMin(l.end) <= now;
-    const current = !done && toMin(l.start) <= now;
-    return el("div", { class: "day-row" + (done ? " done" : "") + (current ? " now" : "") },
-      el("span", { class: "t" }, l.start),
-      el("span", { class: "s" }, l.subject, halfNote(l) ? el("span", { class: "half" }, ` · ${halfNote(l)}`) : null,
-        state.week.mine ? el("span", { class: "half" }, ` · ${whoText(l)}`) : null),
-      el("span", { class: "r" + (l.was && "room" in l.was ? " changed" : "") }, l.room || ""),
-      l.status ? el("span", { class: "row-change" }, changeText(l)) : null,
-      done ? attendanceLine(l, state.week.today, false, true) : null);
-  }));
-}
-
 // Сегодня: «Сейчас» крупно, «Дальше» и весь день списком
 function todayView(day) {
   const now = nowMinutes();
@@ -600,13 +588,16 @@ function todayView(day) {
   } else {
     top.push(checkinBanner(), doneCard(day));
   }
-  return [...top, dayLabel("Весь день"), dayList(lessons, now)];
+  return [...top, dayLabel("Весь день"), ...dayCards(day, now)];
 }
 
-// Другие дни: подробные карточки с перерывами и окнами
-function dayCards(day) {
+// Пары дня подробными карточками с перерывами и окнами. now — сегодня: прошедшие приглушены,
+// текущая выделена (её отметка — на карточке «Сейчас»)
+function dayCards(day, now = null) {
   const nodes = [];
   day.lessons.forEach((l, idx) => {
+    const done = now !== null && toMin(l.end) <= now;
+    const current = now !== null && !done && toMin(l.start) <= now;
     if (idx > 0) {
       const gap = toMin(l.start) - toMin(day.lessons[idx - 1].end);
       if (gap > 0) {
@@ -621,13 +612,14 @@ function dayCards(day) {
     if (l.room) meta.push(roomText(l.room));
     if (whoText(l)) meta.push(whoText(l));
     if (halfNote(l)) meta.push(halfNote(l));
-    nodes.push(el("div", { class: "lesson-card" },
+    nodes.push(el("div", { class: "lesson-card" + (done ? " done" : "") + (current ? " now" : "") },
       el("div", { class: "lc-top" },
-        el("b", {}, `${l.start}–${l.end}`), l.pair_num ? el("span", {}, `${l.pair_num} пара`) : null),
+        el("b", {}, `${l.start}–${l.end}`),
+        el("span", {}, current ? "идёт сейчас" : done ? "прошла" : l.pair_num ? `${l.pair_num} пара` : null)),
       el("div", { class: "lc-subject" }, l.subject),
       meta.length ? el("div", { class: "lc-meta" }, ...meta.flatMap((m, i) => (i ? [el("span", { class: "sep" }), m] : [m]))) : null,
       changeBadge(l),
-      attendanceLine(l, day.date)));
+      current ? null : attendanceLine(l, day.date)));
   });
   return nodes;
 }
@@ -1351,10 +1343,11 @@ const mediaUrl = (path) => (path ? SERVER + path : null);
 
 function avatarNode(name, photo) {
   const initials = name.split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
-  const img = photo ? el("img", { src: mediaUrl(photo), alt: "", loading: "lazy" }) : null;
+  const img = photo ? el("img", { src: mediaUrl(photo), alt: `Фото: ${name}`, loading: "lazy" }) : null;
+  const label = el("span", { "aria-hidden": photo ? "true" : null }, initials);
   // Не загрузилось — остаются инициалы
-  img?.addEventListener("error", () => img.remove());
-  return el("div", { class: "avatar" }, el("span", {}, initials), img);
+  img?.addEventListener("error", () => { img.remove(); label.removeAttribute("aria-hidden"); });
+  return el("div", { class: "avatar", title: name }, label, img);
 }
 
 // Квадратное фото 512×512 в JPEG: обрезаем по центру, метаданные (геопозиция) не попадают
@@ -1697,16 +1690,18 @@ function accountCard() {
     haptic();
   } });
   const hint = installHint();
-  return el("section", { class: "panel list" },
-    hint ? el("div", { class: "list-pad" }, hint) : null,
-    listRow({ iconName: "edit", title: "ФИО", hint: displayName(state.me), onclick: nameSheet }),
-    row, form,
-    NATIVE ? listRow({ iconName: "external", title: "Сервер", hint: serverLabel(), chevron: false }) : null,
-    listRow({ iconName: "logout", title: "Выйти", danger: true, chevron: false, onclick: async () => {
-      if (!(await confirmDialog("Выйти из аккаунта на этом устройстве?", "Выйти"))) return;
-      await logout();
-    } }),
-    listRow({ iconName: "trash", title: "Удалить аккаунт", danger: true, chevron: false, onclick: deleteAccount }));
+  return el("div", { class: "stackv" },
+    hint ? el("section", { class: "panel" }, hint) : null,
+    el("section", { class: "panel list" },
+      el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, "Аккаунт")),
+      listRow({ iconName: "edit", title: "ФИО", hint: displayName(state.me), onclick: nameSheet }),
+      row, form,
+      NATIVE ? listRow({ iconName: "external", title: "Сервер", hint: serverLabel(), chevron: false }) : null,
+      listRow({ iconName: "logout", title: "Выйти", danger: true, chevron: false, onclick: async () => {
+        if (!(await confirmDialog("Выйти из аккаунта на этом устройстве?", "Выйти"))) return;
+        await logout();
+      } }),
+      listRow({ iconName: "trash", title: "Удалить аккаунт", danger: true, chevron: false, onclick: deleteAccount })));
 }
 
 async function logout() {
@@ -3471,6 +3466,7 @@ function showOnly(id) {
 // ФИО — каждое слово в своём поле. Первая буква сама становится заглавной
 const NAME_WORD = /^[\p{L}]+(?:[-'’.][\p{L}]*)*$/u;
 const capFirst = (s) => s.charAt(0).toUpperCase() + s.slice(1);
+const letters = (s) => (s.match(/\p{L}/gu) || []).length;
 function fioFields(fullName = "") {
   const [last = "", first = "", ...rest] = fullName.split(/\s+/).filter(Boolean);
   const make = (value, autocomplete, placeholder) => el("input", {
@@ -3495,6 +3491,7 @@ function fioFields(fullName = "") {
       if (!l) return "Напиши фамилию";
       if (!f) return "Напиши имя";
       if (![l, f, ...m.split(" ")].filter(Boolean).every((w) => NAME_WORD.test(w))) return "В ФИО — только буквы и дефис";
+      if (letters(l) < 2 || letters(f) < 2) return "Фамилию и имя — полностью, не инициалами";
       return null;
     },
   };

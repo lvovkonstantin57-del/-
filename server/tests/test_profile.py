@@ -109,3 +109,42 @@ async def test_wipe_once(database, tmp_path):
         await s.commit()
     assert await wipe_attendance.wipe_once(str(tmp_path)) is None
     assert await wipe_attendance.count() == (1, 0)
+
+
+async def test_initials_are_not_a_name(client):
+    for bad in ("admin t t", "д.д.д", "1 1 1", "И. Иванов"):
+        r = await client.post("/api/auth/register", json={"login": "x" + str(abs(hash(bad)) % 9999), "full_name": bad,
+                                                          "password": PASSWORD})
+        assert r.status_code == 422, bad
+
+
+async def test_security_and_cache_headers(client):
+    page = await client.get("/")
+    csp = page.headers["content-security-policy"]
+    assert "script-src 'self'" in csp and "frame-ancestors 'none'" in csp and "object-src 'none'" in csp
+    assert page.headers["cache-control"] == "no-cache" and page.headers["x-content-type-options"] == "nosniff"
+    assert (await client.get("/icon-192.png")).headers["cache-control"] == "public, max-age=2592000"
+    assert "immutable" in (await client.get("/app.js?v=abc")).headers["cache-control"]
+    assert (await client.get("/healthz")).headers["cache-control"] == "no-cache"
+    api = await client.get("/api/me")
+    assert api.headers["cache-control"] == "no-store" and "content-security-policy" not in api.headers
+
+
+async def test_bad_names_cleanup(client, database, tmp_path):
+    from app import bad_names
+    boss = await owner(client)
+    good = await register(client, "good", "Хороший Хорош Хорошевич")
+    async with database.session() as s:  # пробные аккаунты из старой версии, когда ФИО не проверялось
+        for login, fio in (("ddd", "д.д.д ж"), ("ones", "1 1 1"), ("adm", "admin t t")):
+            await users.create_user(s, login, PASSWORD, "Временный Временный")
+            u = await s.scalar(select(users.User).where(users.User.login == login))
+            u.full_name = fio
+        await s.commit()
+    report = await bad_names.run(False)
+    assert len(report) == 4 and any("admin t t" in line for line in report)
+    report = await bad_names.run(True, str(tmp_path))
+    assert sum("удалён" in line for line in report) == 3
+    async with database.session() as s:
+        logins = set((await s.scalars(select(users.User.login))).all())
+    assert logins == {boss.me["login"], "good"}
+    assert (await bad_names.run(False)) == ["Аккаунтов с неправильным ФИО нет."]
