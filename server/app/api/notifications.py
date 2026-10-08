@@ -4,7 +4,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app import notify, roles, security
 from app.api.deps import SessionDep, StaffDep, UserDep
@@ -61,6 +61,24 @@ async def new_notifications(user: UserDep, s: SessionDep, after_id: int = 0):
 @api.post("/notifications/read")
 async def read_notifications(body: ReadIn, user: UserDep, s: SessionDep):
     await notify.mark_read(s, user.id, body.ids)
+    await s.commit()
+    return {"unread": await notify.unread_count(s, user.id)}
+
+
+@api.delete("/notifications")
+async def clear_notifications(user: UserDep, s: SessionDep):
+    """Очистить ленту целиком."""
+    result = await s.execute(delete(Notification).where(Notification.user_id == user.id))
+    await s.commit()
+    return {"deleted": result.rowcount, "unread": 0}
+
+
+@api.delete("/notifications/{notification_id}")
+async def delete_notification(notification_id: int, user: UserDep, s: SessionDep):
+    n = await s.get(Notification, notification_id)
+    if n is None or n.user_id != user.id:
+        raise HTTPException(404, "Уведомление не найдено")
+    await s.delete(n)
     await s.commit()
     return {"unread": await notify.unread_count(s, user.id)}
 

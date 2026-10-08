@@ -106,6 +106,7 @@ const ICONS = {
   expand: '<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>',
   refresh: '<path d="M20 12a8 8 0 1 1-2.4-5.7"/><path d="M20 4v4.5h-4.5"/>',
   close: '<path d="M6 6l12 12M18 6 6 18"/>',
+  qr: '<rect x="3.5" y="3.5" width="6" height="6" rx="1"/><rect x="14.5" y="3.5" width="6" height="6" rx="1"/><rect x="3.5" y="14.5" width="6" height="6" rx="1"/><path d="M14.5 14.5h2.5v2.5h-2.5zM20.5 14.5v.01M14.5 20.5h.01M17.5 20.5h3M20.5 17.5v.01"/>',
   camera: '<path d="M4 8.5A2.5 2.5 0 0 1 6.5 6H8l1.5-2.5h5L16 6h1.5A2.5 2.5 0 0 1 20 8.5v9a2.5 2.5 0 0 1-2.5 2.5h-11A2.5 2.5 0 0 1 4 17.5z"/><circle cx="12" cy="12.5" r="3.5"/>',
   calEdit: '<path d="M11 21.5H7a4 4 0 0 1-4-4v-9a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4v3"/><path d="M8 2.5v4M16 2.5v4M3 10h18"/><path d="M19.4 14.6a1.6 1.6 0 0 1 2.3 2.3L17 21.5l-3 .7.7-3z"/>',
   file: '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/>',
@@ -1121,17 +1122,38 @@ async function renderInbox(box) {
     try {
       const next = await api("/api/notifications?before_id=" + items[items.length - 1].id);
       items.push(...next.items);
-      next.items.forEach((n) => list.append(noteRow(n)));
+      next.items.forEach((n) => list.append(noteRow(n, remove)));
       more.hidden = !next.more;
     } catch (e) { toast(e.message); }
     finally { more.disabled = false; }
   } }, "Показать ещё");
   more.hidden = !page.more;
-  setChildren(list, ...items.map(noteRow));
-  if (!items.length) {
-    setChildren(box, el("section", { class: "empty-day" }, el("b", {}, "Пока пусто"),
-      "Здесь появятся сообщения: тебя добавили в группу, изменилось расписание, объявление старосты."));
-  } else setChildren(box, list, more);
+  const empty = () => setChildren(box, el("section", { class: "empty-day" }, el("b", {}, "Пока пусто"),
+    "Здесь появятся сообщения: тебя добавили в группу, изменилось расписание, объявление старосты."));
+  // Удалить одно уведомление — строка уезжает из списка
+  const remove = async (n, row) => {
+    try {
+      setUnread((await api(`/api/notifications/${n.id}`, { method: "DELETE" })).unread);
+      haptic();
+      items.splice(items.indexOf(n), 1);
+      row.remove();
+      if (!items.length && more.hidden) empty();
+    } catch (e) { toast(e.message); }
+  };
+  const clearAll = el("button", { class: "link-btn small danger-text", onclick: async () => {
+    if (!(await confirmDialog("Очистить все уведомления? Их нельзя будет вернуть.", "Очистить"))) return;
+    try {
+      await api("/api/notifications", { method: "DELETE" });
+      hapticResult("success");
+      setUnread(0);
+      Plugins.LocalNotifications?.removeAllDeliveredNotifications?.().catch(() => {});
+      items.length = 0;
+      empty();
+    } catch (e) { toast(e.message); }
+  } }, icon("trash"), "Очистить всё");
+  setChildren(list, ...items.map((n) => noteRow(n, remove)));
+  if (!items.length) empty();
+  else setChildren(box, el("div", { class: "inbox-tools" }, clearAll), list, more);
   if (items[0]) rememberNote(items[0].id);
   // Открыли ленту — всё прочитано (подсветка новых остаётся до следующего открытия)
   if (page.unread) {
@@ -1140,14 +1162,17 @@ async function renderInbox(box) {
   }
 }
 
-function noteRow(n) {
+function noteRow(n, onremove) {
   const reply = n.can_reply ? el("button", { class: "link-btn", onclick: (e) => { e.stopPropagation(); openReply(n); } }, "Ответить") : null;
-  return el("div", { class: "note-row" + (n.read ? "" : " unread") },
+  const del = onremove ? el("button", { class: "link-btn note-del", "aria-label": `Удалить уведомление «${n.title}»`,
+    onclick: (e) => { e.stopPropagation(); onremove(n, row); } }, "Удалить") : null;
+  const row = el("div", { class: "note-row" + (n.read ? "" : " unread") },
     iconTile(NOTE_ICONS[n.kind] || "bell"),
     el("div", { class: "grow" },
       el("b", {}, n.title),
       n.body ? el("div", { class: "note-body" }, n.body) : null,
-      el("div", { class: "note-meta" }, el("span", {}, timeAgo(n.created_at)), reply)));
+      el("div", { class: "note-meta" }, el("span", {}, timeAgo(n.created_at)), el("span", { class: "note-actions" }, reply, del))));
+  return row;
 }
 
 // Шторка снизу с полем ввода: ответ на сообщение, объявление, код
@@ -2801,6 +2826,8 @@ function attendanceSheet(group, iso, lesson, { sessionId = lesson.attendance?.se
     card.append(body);
     let d = null;
     let deadline = 0;
+    let qr = null;                  // живой QR, пока староста его показывает
+    let qrMode = qrModeSaved();
     const isToday = iso === state.me.today;
 
     async function call(path, opts, btn) {
@@ -2854,22 +2881,48 @@ function attendanceSheet(group, iso, lesson, { sessionId = lesson.attendance?.se
       deadline = Date.now() + (d.expires_in || 0) * 1000;
       const source = d.by_teacher
         ? `Отметку ведёт преподаватель${d.teacher ? " — " + d.teacher : ""}. Поменять отметки может только он.`
-        : d.open ? "Студенты вводят код в приложении: «Расписание» → «Отметиться на паре»." : null;
+        : d.open ? "Студенты отмечаются в приложении: «Отметиться на паре» — QR-кодом или цифрами." : null;
       const actions = [];
       if (d.editable && d.open) {
-        actions.push(el("div", { class: "att-code" }, digits,
-          el("div", { class: "progress" }, el("div", { class: "track" }, fill), left),
+        let view;
+        if (qrMode) {
+          qr ||= qrLive(() => api(`/api/admin/attendance/${d.id}/qr`, { method: "POST" }), (e) => {
+            error.textContent = e.message;
+            return e.status !== 400 && e.status !== 403;
+          });
+          view = qr.node;
+        } else {
+          qr?.stop();
+          qr = null;
+          view = [digits, el("div", { class: "progress" }, el("div", { class: "track" }, fill), left)];
+        }
+        actions.push(el("div", { class: "att-code" + (qrMode ? " qr-mode" : "") }, view,
           el("div", { class: "att-code-actions" },
-            el("button", { class: "btn tinted small", onclick: async (e) => {
+            qrMode ? null : el("button", { class: "btn tinted small", onclick: async (e) => {
               const r = await call(`/api/admin/attendance/${d.id}/code`, { method: "POST" }, e.currentTarget);
               if (r) { haptic("medium"); show(r); }
             } }, icon("refresh"), "Новый код"),
             el("button", { class: "btn tinted small", onclick: async (e) => {
+              haptic();
+              qrMode = !qrMode;
+              saveQrMode(qrMode);
+              if (qrMode) { show(d); return; }
+              qr?.stop();
+              qr = null;
+              // Пока был QR, цифр не было — показываем свежий код
+              const r = await call(`/api/admin/attendance/${d.id}/code`, { method: "POST" }, e.currentTarget);
+              show(r || d);
+            } }, icon(qrMode ? "hash" : "qr"), qrMode ? "Цифры" : "QR-код"),
+            el("button", { class: "btn tinted small", onclick: async (e) => {
               const r = await call(`/api/admin/attendance/${d.id}/close`, { method: "POST" }, e.currentTarget);
               if (r) { hapticResult("success"); toast(`В журнале: ${r.present} из ${r.total}`); show(r); }
             } }, "Завершить"))));
-        drawCode();
-      } else if (d.editable && isToday) {
+        if (!qrMode) drawCode();
+      } else {
+        qr?.stop();
+        qr = null;
+      }
+      if (!(d.editable && d.open) && d.editable && isToday) {
         actions.push(el("button", { class: "btn tinted block", onclick: async (e) => {
           const r = await call(`/api/admin/attendance/${d.id}/code`, { method: "POST" }, e.currentTarget);
           if (r) { hapticResult("success"); show(r); }
@@ -3086,6 +3139,164 @@ function attendanceCard(group) {
   return card;
 }
 
+// --- QR-код отметки: меняется каждые несколько секунд --------------------------------
+//
+// Преподаватель или староста показывает QR, студент сканирует его в приложении (или камерой
+// телефона — тогда откроется сайт со ссылкой ?att=…). Код в QR живёт 10–20 секунд.
+
+// Библиотеки QR лежат рядом (vendor/) и грузятся только когда нужны
+const vendorLoads = {};
+function loadVendor(name) {
+  vendorLoads[name] ||= new Promise((resolve, reject) => {
+    const script = el("script", { src: `vendor/${name}.min.js` });
+    script.onload = resolve;
+    script.onerror = () => { delete vendorLoads[name]; script.remove(); reject(new Error("Не загрузилось — проверь интернет")); };
+    document.head.append(script);
+  });
+  return vendorLoads[name];
+}
+
+const qrLink = (token) => `${(SERVER || location.origin).replace(/\/+$/, "")}/?att=${encodeURIComponent(token)}`;
+const QR_TOKEN_RE = /^\d+\.\d+\.[0-9a-f]{16}$/;
+
+// Из прочитанного QR — код отметки (ссылка ?att=… или сам код), иначе null
+function qrTokenFrom(text) {
+  try {
+    const t = new URL(text).searchParams.get("att");
+    if (t && QR_TOKEN_RE.test(t)) return t;
+  } catch (_) { /* не ссылка */ }
+  return QR_TOKEN_RE.test(text || "") ? text : null;
+}
+
+// QR как SVG: тёмные модули одним путём, вокруг — белое поле
+function qrSvg(text) {
+  const q = window.qrcode(0, "M");
+  q.addData(text);
+  q.make();
+  const n = q.getModuleCount();
+  let d = "";
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) if (q.isDark(r, c)) d += `M${c} ${r}h1v1h-1z`;
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `-4 -4 ${n + 8} ${n + 8}`);
+  svg.setAttribute("shape-rendering", "crispEdges");
+  const bg = document.createElementNS(ns, "rect");
+  bg.setAttribute("x", "-4"); bg.setAttribute("y", "-4");
+  bg.setAttribute("width", n + 8); bg.setAttribute("height", n + 8);
+  bg.setAttribute("fill", "#ffffff");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", d);
+  path.setAttribute("fill", "#000000");
+  svg.append(bg, path);
+  return svg;
+}
+
+// Живой QR: спрашивает у сервера новый код к моменту смены, полоска показывает, сколько осталось.
+// Останавливается сам, когда его убрали со страницы; mirror — копия для показа на весь экран.
+function qrLive(fetchToken, onError) {
+  const box = el("div", { class: "qr-box", role: "img", "aria-label": "QR-код для отметки" }, el("span", { class: "qr-wait" }, "Загрузка…"));
+  const fill = el("div", { class: "fill" });
+  const note = el("span", { class: "qr-note" }, "меняется каждые 10 секунд");
+  const node = el("div", { class: "qr-live" }, box, el("div", { class: "qr-progress" }, el("div", { class: "track" }, fill), note));
+  const mirrors = new Set();
+  let timer = null, stopped = false, seen = false, link = null;
+  const draw = (target) => { if (link) setChildren(target, qrSvg(link)); };
+  async function next() {
+    if (stopped) return;
+    if (node.isConnected) seen = true;
+    else if (seen) { stop(); return; }
+    try {
+      await loadVendor("qrcode");
+      const q = await fetchToken();
+      if (stopped) return;
+      link = qrLink(q.token);
+      draw(box);
+      mirrors.forEach(draw);
+      fill.style.transition = "none";
+      fill.style.transform = `scaleX(${Math.min(1, q.next_in / q.step)})`;
+      void fill.offsetWidth;
+      fill.style.transition = `transform ${q.next_in}s linear`;
+      fill.style.transform = "scaleX(0)";
+      timer = setTimeout(next, q.next_in * 1000 + 150);
+    } catch (e) {
+      if (stopped) return;
+      if (onError?.(e) === false) { stop(); return; }
+      timer = setTimeout(next, 3000);
+    }
+  }
+  function stop() { stopped = true; clearTimeout(timer); mirrors.clear(); }
+  next();
+  return {
+    node, stop,
+    mirror(target) { mirrors.add(target); draw(target); return () => mirrors.delete(target); },
+  };
+}
+
+// Сканер: камера на весь экран, ищем QR в кадре несколько раз в секунду
+async function openScanner(onToken, onClose) {
+  if (!navigator.mediaDevices?.getUserMedia) {
+    toast("Камера здесь недоступна — введи код из 4 цифр", 3500);
+    return;
+  }
+  const video = el("video", { class: "scan-video", autoplay: true, muted: true, playsinline: true });
+  video.muted = true;
+  const hint = el("p", { class: "scan-hint" }, "Наведи камеру на QR-код на экране преподавателя или старосты");
+  const ov = el("div", { class: "scan-overlay", role: "dialog", "aria-label": "Сканер QR-кода" },
+    video, el("div", { class: "scan-frame", "aria-hidden": "true" }), hint,
+    el("button", { class: "btn scan-cancel", onclick: () => close() }, "Отмена"));
+  const canvas = document.createElement("canvas");
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  let stream = null, timer = null, done = false;
+  function close() {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    stream?.getTracks().forEach((t) => t.stop());
+    ov.remove();
+    onClose?.();
+  }
+  document.body.append(ov);
+  setBackButton(close);
+  try {
+    await loadVendor("jsqr");
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" }, audio: false });
+  } catch (e) {
+    close();
+    toast(e.name === "NotAllowedError" ? "Нет доступа к камере. Разреши его в настройках телефона или введи код"
+      : e.name === "NotFoundError" ? "Камера не найдена — введи код из 4 цифр" : e.message || "Камера не включилась", 4000);
+    return;
+  }
+  if (done) { stream.getTracks().forEach((t) => t.stop()); return; }
+  video.srcObject = stream;
+  video.play().catch(() => {});
+  const scan = () => {
+    if (done) return;
+    if (video.readyState >= 2 && video.videoWidth) {
+      const k = Math.min(1, 720 / Math.max(video.videoWidth, video.videoHeight));
+      canvas.width = Math.round(video.videoWidth * k);
+      canvas.height = Math.round(video.videoHeight * k);
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const found = window.jsQR(img.data, img.width, img.height, { inversionAttempts: "dontInvert" });
+      const token = found && qrTokenFrom(found.data);
+      if (token) { haptic("medium"); close(); onToken(token); return; }
+      if (found) hint.textContent = "Это не QR-код отметки. Наведи на QR с экрана преподавателя";
+    }
+    timer = setTimeout(scan, 160);
+  };
+  scan();
+}
+
+// Открыли сайт по ссылке из QR (камерой телефона): отмечаем сразу после входа
+function takeQrLink() {
+  const params = new URLSearchParams(location.search);
+  const token = qrTokenFrom(params.get("att") || "");
+  if (!params.has("att")) return;
+  params.delete("att");
+  history.replaceState(null, "", location.pathname + (params.size ? `?${params}` : "") + location.hash);
+  if (token && state.me?.student) openCheckin({ qr: token });
+}
+
 // --- студент: «Отметиться на паре» ------------------------------------------------
 
 // Пары с отметкой сегодня у группы студента: идёт ли отметка и есть ли он в списке
@@ -3113,7 +3324,7 @@ function heroAction(l) {
   if (x?.marked) return el("div", { class: "hero-marked" }, icon("checkCircle"), `Отметка есть · ${x.marked_at}`);
   const live = liveSession();
   return el("button", { class: "hero-btn" + (live ? " live" : ""), onclick: () => openCheckin() },
-    icon("checkCircle"), live ? "Идёт отметка — ввести код" : "Отметиться на паре");
+    icon("checkCircle"), live ? "Идёт отметка — отметиться" : "Отметиться на паре");
 }
 
 // Пар по расписанию больше нет, а преподаватель открыл отметку — всё равно показываем кнопку
@@ -3124,10 +3335,10 @@ function checkinBanner() {
     el("div", { class: "hero-top" }, el("span", {}, "Идёт отметка"), el("span", { class: "num" }, x.started_at)),
     el("div", { class: "hero-subject" }, x.subject),
     el("div", { class: "hero-foot" }, x.teacher),
-    el("button", { class: "hero-btn live", onclick: () => openCheckin() }, icon("checkCircle"), "Ввести код"));
+    el("button", { class: "hero-btn live", onclick: () => openCheckin() }, icon("checkCircle"), "Отметиться"));
 }
 
-function openCheckin() {
+function openCheckin(opts = {}) {
   haptic("light");
   const input = el("input", {
     class: "code-input", type: "text", inputmode: "numeric", pattern: "[0-9]*", autocomplete: "one-time-code",
@@ -3137,12 +3348,17 @@ function openCheckin() {
   const field = el("label", { class: "code-field" }, cells, input);
   const error = el("p", { class: "sheet-error", role: "alert" });
   const submit = el("button", { class: "btn block", disabled: true, onclick: () => send() }, "Отметиться");
+  const scanBtn = el("button", { class: "btn tinted block", onclick: () => {
+    input.blur();
+    error.textContent = "";
+    openScanner((token) => { setBackButton(close); send({ qr: token }); }, () => setBackButton(close));
+  } }, icon("qr"), "Сканировать QR-код");
   const closeBtn = () => el("button", { class: "sheet-close", "aria-label": "Закрыть", onclick: () => close() }, icon("close"));
   const card = el("div", { class: "sheet", role: "dialog", "aria-modal": "true", "aria-labelledby": "sheet-title" },
     closeBtn(),
     el("h2", { id: "sheet-title" }, "Отметиться на паре"),
-    el("p", { class: "sheet-sub" }, "Введи код, который показал преподаватель или староста. Он работает минуту."),
-    field, error, submit);
+    el("p", { class: "sheet-sub" }, "Отсканируй QR-код или введи 4 цифры, которые показал преподаватель или староста."),
+    scanBtn, el("p", { class: "or-line" }, "или код"), field, error, submit);
   const backdrop = el("div", { class: "sheet-backdrop", onclick: (e) => { if (e.target === backdrop) close(); } }, card);
   const onKey = (e) => { if (e.key === "Escape") close(); };
   let busy = false;
@@ -3159,13 +3375,13 @@ function openCheckin() {
     if (input.value.length === 4) send();
   });
 
-  async function send() {
-    if (busy || input.value.length !== 4) return;
+  async function send(body = null) {
+    if (busy || (!body && input.value.length !== 4)) return;
     busy = true;
     submit.textContent = "Проверяю…";
     draw();
     try {
-      const r = await api("/api/attendance/checkin", { method: "POST", body: { code: input.value } });
+      const r = await api("/api/attendance/checkin", { method: "POST", body: body || { code: input.value } });
       hapticResult("success");
       card.classList.add("done");
       setChildren(card, closeBtn(),
@@ -3183,7 +3399,7 @@ function openCheckin() {
       field.classList.add("shake");
       input.value = "";
       submit.textContent = "Отметиться";
-      input.focus();
+      if (!body) input.focus();
     } finally {
       busy = false;
       draw();
@@ -3200,17 +3416,25 @@ function openCheckin() {
   document.addEventListener("keydown", onKey);
   setBackButton(close);
   draw();
+  if (opts.qr) { send({ qr: opts.qr }); return; }
   // Сразу, в том же нажатии: иначе iOS не покажет клавиатуру
   input.focus({ preventScroll: true });
 }
 
 // --- «Код»: преподаватель открывает отметку на паре ---------------------------------
 
-const live = { id: null, data: null, deadline: 0, poll: null, tick: null, fs: null };
+const live = { id: null, data: null, deadline: 0, poll: null, tick: null, fs: null, qr: null };
+
+// Что показывать на паре — цифры или QR: запоминаем выбор на этом устройстве
+const QR_MODE_KEY = "mpgu_qr_mode";
+const qrModeSaved = () => { try { return localStorage.getItem(QR_MODE_KEY) === "1"; } catch (_) { return false; } };
+const saveQrMode = (on) => { try { localStorage.setItem(QR_MODE_KEY, on ? "1" : "0"); } catch (_) { /* не страшно */ } };
 
 function stopCodeLive() {
   clearTimeout(live.poll);
   clearInterval(live.tick);
+  live.qr?.stop();
+  live.qr = null;
   live.id = live.poll = live.tick = null;
   live.fs?.close();
 }
@@ -3340,11 +3564,15 @@ function codeLive(x) {
   const left = el("span", { class: "code-left" });
   const present = el("b", { class: "stat" });
   const newBtn = el("button", { class: "hero-btn", onclick: newCode }, icon("refresh"), "Новый код");
+  const modeBtn = el("button", { class: "hero-btn", onclick: () => setMode(!qrMode) });
+  const codeArea = el("div", { class: "code-area" });
+  const digitsArea = [digits, el("div", { class: "hero-progress" }, el("div", { class: "track" }, fill), left)];
+  let qrMode = false;
   const hero = el("section", { class: "hero code-hero" },
-    el("div", { class: "hero-top" }, el("span", {}, "Код для отметки"),
+    el("div", { class: "hero-top" }, el("span", {}, "Отметка на паре"),
       el("button", { class: "hero-link", onclick: fullscreen }, icon("expand"), "на весь экран")),
-    digits,
-    el("div", { class: "hero-progress" }, el("div", { class: "track" }, fill), left),
+    codeArea,
+    el("div", { class: "hero-actions" }, modeBtn),
     el("div", { class: "hero-tiles" },
       el("div", { class: "hero-tile grow" }, el("small", {}, "отметились"), present),
       el("div", { class: "hero-tile grow" }, el("small", {}, x.groups.length > 1 ? "подгруппы" : "подгруппа"),
@@ -3362,7 +3590,32 @@ function codeLive(x) {
     if (key !== rosterKey) { rosterKey = key; setChildren(lists, ...rosterCards(d, toggle)); }
     tick();
   }
+  // Цифры (код на минуту) или QR (меняется каждые 10 секунд); переключение — сразу на экране
+  async function setMode(on, quiet = false) {
+    if (!quiet) haptic();
+    qrMode = on;
+    saveQrMode(on);
+    live.fs?.close();
+    live.qr?.stop();
+    live.qr = null;
+    setChildren(modeBtn, icon(on ? "hash" : "qr"), on ? "Показать цифры" : "Показать QR-код");
+    newBtn.hidden = on;
+    hero.classList.toggle("qr-mode", on);
+    if (on) {
+      live.qr = qrLive(() => api(`/api/teacher/sessions/${x.id}/qr`, { method: "POST" }), (e) => {
+        toast(e.message);
+        return e.status !== 400;  // пара завершена — QR больше не нужен
+      });
+      setChildren(codeArea, live.qr.node);
+      hero.classList.remove("expired");
+    } else {
+      setChildren(codeArea, ...digitsArea);
+      if (!quiet) await newCode();  // пока был QR, цифр не было — нужен свежий код
+      tick();
+    }
+  }
   function tick() {
+    if (qrMode) return;
     const d = live.data;
     const ms = Math.max(0, live.deadline - Date.now());
     const code = ms > 0 && d.code ? d.code : null;
@@ -3416,6 +3669,18 @@ function codeLive(x) {
   // Для проектора или ноутбука на кафедре: только код, крупно
   function fullscreen() {
     haptic();
+    if (qrMode && live.qr) {
+      const fsQr = el("div", { class: "fs-qr" });
+      const unmirror = live.qr.mirror(fsQr);
+      const ov = el("div", { class: "code-fullscreen qr", role: "dialog", "aria-label": "QR-код на весь экран", onclick: () => close() },
+        el("div", { class: "fs-top" }, x.subject), fsQr,
+        el("div", { class: "fs-hint" }, "Студентам: «Отметиться на паре» → «Сканировать QR-код» · нажмите, чтобы закрыть"));
+      const close = () => { unmirror(); ov.remove(); live.fs = null; setBackButton(null); };
+      live.fs = { close, update: () => {} };
+      document.body.append(ov);
+      setBackButton(close);
+      return;
+    }
     const fsDigits = el("div", { class: "fs-digits" });
     const fsLeft = el("div", { class: "fs-left" });
     const ov = el("div", { class: "code-fullscreen", role: "dialog", "aria-label": "Код на весь экран", onclick: () => close() },
@@ -3433,6 +3698,7 @@ function codeLive(x) {
   }
 
   apply(x);
+  setMode(qrModeSaved(), true);
   live.tick = setInterval(tick, 200);
   live.poll = setTimeout(poll, 2500);
 }
@@ -4100,6 +4366,7 @@ async function start() {
   pollInbox();
   // Разрешение на уведомления спрашиваем после входа: и для напоминаний, и для ленты в фоне
   askNotificationPermission().then(() => syncReminders(true));
+  takeQrLink();
 }
 
 init().catch((e) => console.error(e)).finally(hideSplash);

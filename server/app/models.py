@@ -275,6 +275,8 @@ class AttendanceSession(Base):
     # Кто открыл отметку, если не преподаватель: староста или админ ведёт журнал группы сам.
     # Такую пару староста может править; пары преподавателя — только смотреть.
     opened_by: Mapped[int | None] = mapped_column(Integer)
+    # Ключ для QR-кода, который меняется каждые несколько секунд (появляется при первом показе QR)
+    qr_secret: Mapped[str | None] = mapped_column(String(32))
 
     groups: Mapped[list["AttendanceGroup"]] = relationship(
         lazy="selectin", cascade="all, delete-orphan", order_by="AttendanceGroup.group_name"

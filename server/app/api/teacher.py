@@ -45,7 +45,8 @@ class MarkIn(BaseModel):
 
 
 class CheckinIn(BaseModel):
-    code: str = Field(max_length=20)
+    code: str | None = Field(default=None, max_length=20)
+    qr: str | None = Field(default=None, max_length=100)  # QR с экрана преподавателя или старосты
 
 
 # --- студент ------------------------------------------------------------------
@@ -64,7 +65,10 @@ async def my_stats(user: UserDep, s: SessionDep):
 
 @api.post("/attendance/checkin")
 async def checkin(body: CheckinIn, user: UserDep, s: SessionDep):
-    x, mark, already = await attendance.checkin(s, user, body.code)
+    if body.qr:
+        x, mark, already = await attendance.checkin_qr(s, user, body.qr)
+    else:
+        x, mark, already = await attendance.checkin(s, user, body.code)
     return {
         "ok": True, "already": already, "subject": x.subject, "teacher": x.teacher_name,
         "at": attendance.local_hhmm(mark.marked_at),
@@ -125,6 +129,12 @@ async def get_session(session_id: int, teacher: TeacherDep, s: SessionDep):
 async def new_code(session_id: int, teacher: TeacherDep, s: SessionDep):
     x = await attendance.new_code(s, await attendance.teacher_session(s, teacher, session_id))
     return await attendance.session_detail(s, x)
+
+
+@api.post("/teacher/sessions/{session_id}/qr")
+async def qr_code(session_id: int, teacher: TeacherDep, s: SessionDep):
+    """QR для отметки; меняется каждые attendance.QR_STEP секунд — экран спрашивает новый."""
+    return await attendance.qr_token(s, await attendance.teacher_session(s, teacher, session_id))
 
 
 @api.post("/teacher/sessions/{session_id}/close")

@@ -812,7 +812,7 @@ button.att-line:active { transform: scale(.98); }
 .att-sheet .big-line { margin-top: 0; }
 .att-sheet .panel.list { padding: 0; background: none; border-radius: 0; }
 .att-sheet .panel.list .panel-top.pad { padding-left: 0; padding-right: 0; }
-.att-sheet .btn .icon { width: 18px; height: 18px; margin-right: 6px; vertical-align: -3px; }
+.btn .icon { width: 18px; height: 18px; margin-right: 6px; vertical-align: -3px; }
 .att-code { padding: 14px; border-radius: 18px; background: var(--fill); }
 .att-code .progress { margin-top: 10px; }
 .att-code-actions { display: flex; justify-content: center; gap: 8px; margin-top: 10px; }
@@ -908,3 +908,48 @@ button:not(:disabled):active, a[href]:active, [role=button]:active {
 .device-row .grow { min-width: 0; }
 .device-row b { display: block; font-size: 16px; font-weight: 600; }
 .device-row small { display: block; color: var(--hint); font-size: 13px; }
+
+/* QR-код отметки: белый квадрат, под ним — полоска до смены кода */
+.qr-live { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-top: 16px; }
+.qr-box {
+  width: min(260px, 70vw); aspect-ratio: 1; border-radius: 18px; background: #ffffff; overflow: hidden;
+  display: grid; place-items: center;
+}
+.qr-box svg, .fs-qr svg { width: 100%; height: 100%; display: block; }
+.qr-wait { color: #6b7472; font-size: 14px; }
+.qr-progress { width: min(260px, 70vw); display: flex; align-items: center; gap: 10px; font-size: 12px; font-weight: 600; }
+.qr-progress .track { flex: 1; height: 4px; border-radius: 2px; background: rgba(255, 255, 255, .25); overflow: hidden; }
+.qr-progress .fill { height: 100%; width: 100%; background: #ffffff; transform-origin: left; }
+.qr-note { opacity: .85; white-space: nowrap; }
+.att-code.qr-mode .qr-live { margin-top: 0; }
+.att-code .qr-progress { color: var(--hint); }
+.att-code .qr-progress .track { background: var(--sep); }
+.att-code .qr-progress .fill { background: var(--accent); }
+.att-code .qr-box { box-shadow: 0 0 0 1px var(--sep); }
+.code-fullscreen.qr { background: #ffffff; color: #142625; }
+.fs-qr { width: min(78vh, 86vw); aspect-ratio: 1; }
+
+/* «или код» между кнопкой сканера и полем для цифр */
+.or-line { display: flex; align-items: center; gap: 10px; margin: 14px 0 4px; color: var(--hint); font-size: 13px; }
+.or-line::before, .or-line::after { content: ""; flex: 1; height: 1px; background: var(--sep); }
+
+/* Сканер QR: камера на весь экран, рамка по центру */
+.scan-overlay {
+  position: fixed; inset: 0; z-index: 60; background: #000000; color: #ffffff;
+  display: flex; flex-direction: column; align-items: center; justify-content: flex-end;
+  padding: 0 24px calc(28px + var(--safe-bottom)); animation: fade-in .2s;
+}
+.scan-video { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.scan-frame {
+  position: absolute; left: 50%; top: 42%; width: min(68vw, 300px); aspect-ratio: 1; transform: translate(-50%, -50%);
+  border-radius: 28px; box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .45); outline: 3px solid rgba(255, 255, 255, .9); outline-offset: -3px;
+}
+.scan-hint { position: relative; text-align: center; font-size: 16px; line-height: 1.35; margin: 0 0 16px; max-width: 340px; }
+.scan-cancel { position: relative; width: min(340px, 100%); background: rgba(255, 255, 255, .18); color: #ffffff; }
+
+/* Уведомления: очистить всё и удалить одно */
+.inbox-tools { display: flex; justify-content: flex-end; margin: 4px 2px 8px; }
+.inbox-tools .link-btn { display: inline-flex; align-items: center; gap: 4px; }
+.inbox-tools .icon { width: 16px; height: 16px; }
+.note-actions { display: inline-flex; align-items: center; gap: 16px; }
+.note-meta .note-del { color: var(--hint); }

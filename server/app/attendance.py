@@ -4,6 +4,8 @@
 в приложении и оказывается в списке присутствующих этой пары.
 """
 
+import hashlib
+import hmac
 import io
 import logging
 import re
@@ -34,6 +36,7 @@ CODE_LEN = 4
 CODE_TTL = 60                 # секунд работает код
 SESSION_HOURS = 3             # незавершённая пара сама закрывается через столько часов
 FAIL_LIMIT, FAIL_WINDOW = 5, 5 * 60   # неверных кодов подряд — и пауза
+QR_STEP = 10                  # секунд: так часто меняется QR-код; действует текущий и предыдущий
 INVITE_DAYS = 7
 
 
@@ -261,9 +264,9 @@ def is_open(x: AttendanceSession, now: datetime | None = None) -> bool:
 
 
 def code_left(x: AttendanceSession, now: datetime | None = None) -> float:
-    """Сколько секунд ещё работает код; 0 — не работает."""
+    """Сколько секунд ещё идёт отметка по коду или QR; 0 — не идёт."""
     now = now or utcnow()
-    if not is_open(x, now) or not x.code or not x.code_expires_at:
+    if not is_open(x, now) or not x.code_expires_at:
         return 0.0
     return max(0.0, (x.code_expires_at - now).total_seconds())
 
@@ -320,6 +323,49 @@ async def new_code(s: AsyncSession, x: AttendanceSession) -> AttendanceSession:
     x.code = await _new_code(s)
     x.code_expires_at = utcnow() + timedelta(seconds=CODE_TTL)
     await s.commit()
+    return x
+
+
+# --- QR-код, который меняется каждые QR_STEP секунд ------------------------------------
+#
+# В QR — «<пара>.<шаг>.<подпись>»: подпись — HMAC от ключа пары, без него QR не подделать.
+# Действует текущий и предыдущий шаг, то есть от 10 до 20 секунд: фото QR, отправленное
+# в чат, успевает устареть. Пока показывается QR, 4-значного кода нет.
+
+def clock() -> float:
+    return time.time()
+
+
+def _qr_sign(x: AttendanceSession, step: int) -> str:
+    return hmac.new(x.qr_secret.encode(), f"{x.id}.{step}".encode(), hashlib.sha256).hexdigest()[:16]
+
+
+async def qr_token(s: AsyncSession, x: AttendanceSession) -> dict:
+    """Текущий QR пары и через сколько секунд он сменится."""
+    if not is_open(x):
+        raise AttendanceError("Отметка на этой паре уже завершена")
+    if not x.qr_secret:
+        x.qr_secret = secrets.token_hex(16)
+    # Пока на экране QR, цифрового кода нет, а отметка считается идущей («Идёт отметка» у студентов)
+    x.code = None
+    x.code_expires_at = utcnow() + timedelta(seconds=2 * QR_STEP)
+    await s.commit()
+    t = clock()
+    step = int(t // QR_STEP)
+    return {"token": f"{x.id}.{step}.{_qr_sign(x, step)}", "step": QR_STEP,
+            "next_in": round(QR_STEP - t % QR_STEP, 2)}
+
+
+async def _qr_session(s: AsyncSession, token: str | None) -> AttendanceSession:
+    parts = (token or "").strip().split(".")
+    if len(parts) != 3 or not parts[0].isdigit() or not parts[1].isdigit():
+        raise AttendanceError("Это не QR-код отметки", 422)
+    x = await s.get(AttendanceSession, int(parts[0]))
+    step = int(parts[1])
+    if x is None or not x.qr_secret or not hmac.compare_digest(_qr_sign(x, step), parts[2]):
+        raise AttendanceError("QR-код не подходит")
+    if not is_open(x) or step not in (int(clock() // QR_STEP), int(clock() // QR_STEP) - 1):
+        raise AttendanceError("QR-код устарел — отсканируй тот, что сейчас на экране")
     return x
 
 
@@ -470,14 +516,33 @@ def clean_code(text: str | None) -> str | None:
     return code if len(code) == CODE_LEN and code.isdigit() else None
 
 
-async def checkin(s: AsyncSession, user: User, text: str | None) -> tuple[AttendanceSession, AttendanceMark, bool]:
-    """Отмечает студента по коду. Возвращает (пара, отметка, отмечался ли уже раньше)."""
+def _check_can_mark(user: User) -> deque:
     if user.student is None:
         raise AttendanceError("Отмечаться могут студенты, которые уже в группе", 403)
     fails = _recent_fails(user.id)
     if len(fails) >= FAIL_LIMIT:
         wait = max(1, round((FAIL_WINDOW - (time.monotonic() - fails[0])) / 60))
         raise AttendanceError(f"Слишком много неверных кодов. Попробуй через {wait} мин", 429)
+    return fails
+
+
+async def checkin_qr(s: AsyncSession, user: User, token: str | None) -> tuple[AttendanceSession, AttendanceMark, bool]:
+    """Отметка по QR-коду с экрана преподавателя или старосты."""
+    fails = _check_can_mark(user)
+    try:
+        x = await _qr_session(s, token)
+    except AttendanceError:
+        fails.append(time.monotonic())
+        raise
+    if user.group_name not in x.group_names:
+        fails.append(time.monotonic())
+        raise AttendanceError("Этот QR-код для другой группы")
+    return await _mark(s, user, x, fails, "qr")
+
+
+async def checkin(s: AsyncSession, user: User, text: str | None) -> tuple[AttendanceSession, AttendanceMark, bool]:
+    """Отмечает студента по коду. Возвращает (пара, отметка, отмечался ли уже раньше)."""
+    fails = _check_can_mark(user)
     code = clean_code(text)
     if code is None:
         raise AttendanceError("Код — это 4 цифры", 422)
@@ -494,12 +559,17 @@ async def checkin(s: AsyncSession, user: User, text: str | None) -> tuple[Attend
         if found:
             raise AttendanceError("Этот код для другой группы")
         raise AttendanceError("Код неверный или уже не действует. Попроси преподавателя показать новый")
+    return await _mark(s, user, x, fails, "code")
+
+
+async def _mark(s: AsyncSession, user: User, x: AttendanceSession, fails: deque,
+                method: str) -> tuple[AttendanceSession, AttendanceMark, bool]:
     if x.half and user.half and user.half != x.half:
-        raise AttendanceError(f"Этот код для {x.half}-й половины группы, а у тебя в профиле — {user.half}-я")
+        raise AttendanceError(f"Эта отметка для {x.half}-й половины группы, а у тебя в профиле — {user.half}-я")
     mark = await s.get(AttendanceMark, (x.id, user.student_id))
     if mark is not None:
         return x, mark, True
-    mark = AttendanceMark(session_id=x.id, student_id=user.student_id, marked_at=now, method="code")
+    mark = AttendanceMark(session_id=x.id, student_id=user.student_id, marked_at=utcnow(), method=method)
     s.add(mark)
     try:
         await s.commit()

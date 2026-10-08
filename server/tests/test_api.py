@@ -524,3 +524,25 @@ async def test_legacy_import(tmp_path, database, monkeypatch):
 
     with pytest.raises(SystemExit):
         legacy.copy_data(str(old), str(new))  # второй раз в непустую базу — нельзя
+
+
+async def test_clear_notifications(client, database):
+    boss = await owner(client)
+    await client.post("/api/admin/groups", json={"name": "А"}, headers=boss.h)
+    stud = await register(client, "stud", "Студент Группы")
+    await client.post("/api/admin/members", json={"code": stud.code, "group": "А"}, headers=boss.h)
+    await client.post("/api/announce", json={"groups": ["А"], "text": "Завтра пар нет"}, headers=boss.h)
+    items = (await client.get("/api/notifications", headers=stud.h)).json()["items"]
+    assert len(items) >= 2
+
+    # Чужое уведомление не удалить; своё — можно
+    assert (await client.delete(f"/api/notifications/{items[0]['id']}", headers=boss.h)).status_code == 404
+    r = await client.delete(f"/api/notifications/{items[0]['id']}", headers=stud.h)
+    assert r.status_code == 200 and "unread" in r.json()
+    left = (await client.get("/api/notifications", headers=stud.h)).json()["items"]
+    assert [n["id"] for n in left] == [n["id"] for n in items[1:]]
+
+    r = await client.delete("/api/notifications", headers=stud.h)
+    assert r.json()["deleted"] == len(items) - 1
+    page = (await client.get("/api/notifications", headers=stud.h)).json()
+    assert page["items"] == [] and page["unread"] == 0

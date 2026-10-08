@@ -38,7 +38,7 @@ def setup(db_url: str | None = None) -> None:
 ADDED_COLUMNS: dict[str, dict[str, str]] = {
     "lessons": {"weeks": "VARCHAR(200)"},
     "users": {"photo": "VARCHAR(40)"},
-    "attendance_sessions": {"opened_by": "INTEGER"},
+    "attendance_sessions": {"opened_by": "INTEGER", "qr_secret": "VARCHAR(32)"},
 }
 
 

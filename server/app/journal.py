@@ -237,9 +237,15 @@ async def open_group_session(s: AsyncSession, user: User, group: str, d: date, s
     return x
 
 
-async def show_code(s: AsyncSession, user: User, x: AttendanceSession) -> None:
-    """Новый код на минуту. Завершённую сегодняшнюю отметку открывает снова;
-    другие открытые отметки этого старосты закрываются — код один."""
+async def show_qr(s: AsyncSession, user: User, x: AttendanceSession) -> dict:
+    """QR вместо цифр: как show_code, только код меняется каждые несколько секунд."""
+    await _today_open(s, user, x)
+    return await attendance.qr_token(s, x)
+
+
+async def _today_open(s: AsyncSession, user: User, x: AttendanceSession) -> AttendanceSession:
+    """Завершённую сегодняшнюю отметку открывает снова; другие открытые отметки этого старосты
+    закрываются — код один."""
     if x.lesson_date != attendance.local_now().date():
         raise AttendanceError("Код можно показать только на сегодняшней паре")
     now = utcnow()
@@ -251,8 +257,14 @@ async def show_code(s: AsyncSession, user: User, x: AttendanceSession) -> None:
     ))).all():
         if old is not x:
             old.closed_at = now
+    return x
+
+
+async def show_code(s: AsyncSession, user: User, x: AttendanceSession) -> None:
+    """Новый код на минуту."""
+    await _today_open(s, user, x)
     x.code = await _new_code(s)
-    x.code_expires_at = now + timedelta(seconds=CODE_TTL)
+    x.code_expires_at = utcnow() + timedelta(seconds=CODE_TTL)
     await s.commit()
 
 

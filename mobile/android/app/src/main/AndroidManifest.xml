@@ -36,6 +36,9 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <!-- Напоминания о парах ровно в срок: приложение — будильник по расписанию (Android 13+ выдаёт сам) -->
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
+    <!-- Камера — только чтобы отсканировать QR-код отметки на паре; без камеры приложение тоже ставится -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <!-- Фоновой проверке уведомлений геолокация не нужна: убираем разрешения, которые приносит плагин -->
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" tools:node="remove" />

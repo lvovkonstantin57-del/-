@@ -109,6 +109,11 @@ async def test_starosta_marks_lessons_and_sees_them_in_schedule(c, database):
     assert closed["open"] is False and closed["code"] is None
     reopened = (await c.post(f"/api/admin/attendance/{z['id']}/code", headers=star)).json()
     assert reopened["open"] is True and reopened["code"] and reopened["present"] == 1
+    # QR вместо цифр: студент сканирует экран старосты
+    q = (await c.post(f"/api/admin/attendance/{z['id']}/qr", headers=star)).json()
+    r = await c.post("/api/attendance/checkin", headers=anna, json={"qr": q["token"]})
+    assert r.status_code == 200 and r.json()["already"] is True
+    assert (await c.post(f"/api/admin/attendance/{z['id']}/qr", headers=anna)).status_code == 403
 
     # Журнал группы: каждая пара и каждый студент
     j = (await c.get("/api/admin/attendance", params={"group": "ГР 1"}, headers=star)).json()

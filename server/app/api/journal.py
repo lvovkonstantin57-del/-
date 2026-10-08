@@ -74,6 +74,12 @@ async def new_code(session_id: int, user: StaffDep, s: SessionDep):
     return await journal.staff_detail(s, user, x)
 
 
+@api.post("/{session_id}/qr")
+async def qr_code(session_id: int, user: StaffDep, s: SessionDep):
+    x = await journal.staff_session(s, user, session_id, edit=True)
+    return await journal.show_qr(s, user, x)
+
+
 @api.post("/{session_id}/close")
 async def close_session(session_id: int, user: StaffDep, s: SessionDep):
     x = await journal.staff_session(s, user, session_id, edit=True)

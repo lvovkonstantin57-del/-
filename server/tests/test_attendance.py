@@ -313,3 +313,46 @@ def test_teacher_names_in_schedule():
     me = key("Сидоров Сергей Сергеевич")
     assert attendance.same_person(me, key("Сидоров С.")) and attendance.same_person(me, key("Сидоров"))
     assert not attendance.same_person(me, key("Сидоров П. С.")) and not attendance.same_person(me, key("Сидорова С. С."))
+
+
+async def test_qr_checkin_changes_every_few_seconds(c, database, monkeypatch):
+    now = [1_000_000.0]
+    monkeypatch.setattr(attendance, "clock", lambda: now[0])
+    tid, t = await _teacher(database, "sidorov")
+    s1 = await _student(database, "stud1", "Тестов Тест Тестович")
+    s2 = await _student(database, "stud2", "Пробная Анна Сергеевна")
+    s3 = await _student(database, "stud3", "Ёлкин Пётр Иванович")  # ГР 2
+    x = (await c.post("/api/teacher/sessions", headers=t, json={"groups": ["ГР 1"], "subject": "Зоология"})).json()
+
+    q = (await c.post(f"/api/teacher/sessions/{x['id']}/qr", headers=t)).json()
+    assert q["step"] == attendance.QR_STEP and 0 < q["next_in"] <= attendance.QR_STEP
+    # Пока на экране QR, 4-значный код не работает, но отметка идёт
+    assert (await c.post("/api/attendance/checkin", headers=s2, json={"code": x["code"]})).status_code == 400
+    assert (await c.get("/api/attendance/me", headers=s1)).json()["sessions"][0]["code_active"] is True
+
+    r = await c.post("/api/attendance/checkin", headers=s1, json={"qr": q["token"]})
+    assert r.status_code == 200 and r.json()["already"] is False
+    detail = (await c.get(f"/api/teacher/sessions/{x['id']}", headers=t)).json()
+    assert next(p for p in detail["roster"] if p["present"])["method"] == "qr"
+    # Чужая группа и подделанная подпись — нет
+    r = await c.post("/api/attendance/checkin", headers=s3, json={"qr": q["token"]})
+    assert r.status_code == 400 and "другой группы" in r.json()["detail"]
+    fake = q["token"][:-1] + ("0" if q["token"][-1] != "0" else "1")
+    assert "не подходит" in (await c.post("/api/attendance/checkin", headers=s2, json={"qr": fake})).json()["detail"]
+    assert (await c.post("/api/attendance/checkin", headers=s2, json={"qr": "что-то другое"})).status_code == 422
+
+    # Через шаг QR новый, а прошлый ещё действует; через два шага — устарел
+    now[0] += attendance.QR_STEP
+    q2 = (await c.post(f"/api/teacher/sessions/{x['id']}/qr", headers=t)).json()
+    assert q2["token"] != q["token"]
+    now[0] += attendance.QR_STEP
+    r = await c.post("/api/attendance/checkin", headers=s2, json={"qr": q["token"]})
+    assert r.status_code == 400 and "устарел" in r.json()["detail"]
+    assert (await c.post("/api/attendance/checkin", headers=s2, json={"qr": q2["token"]})).status_code == 200
+
+    # Завершили — QR не работает и не выдаётся; чужой преподаватель QR не получит
+    await c.post(f"/api/teacher/sessions/{x['id']}/close", headers=t)
+    q3_status = (await c.post(f"/api/teacher/sessions/{x['id']}/qr", headers=t)).status_code
+    assert q3_status == 400
+    _, other = await _teacher(database, "petrov", "Петров Пётр Петрович")
+    assert (await c.post(f"/api/teacher/sessions/{x['id']}/qr", headers=other)).status_code == 404
