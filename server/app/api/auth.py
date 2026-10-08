@@ -5,7 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 
 from app import codes, security, users
 from app.api.deps import SessionDep, UserDep, bearer, client_ip
@@ -105,6 +105,49 @@ async def delete_account(body: DeleteIn, user: UserDep, s: SessionDep):
     await s.commit()
     log.info("Аккаунт %s удалён владельцем", user.id)
     return {"ok": True}
+
+
+SESSION_ID_LEN = 16  # начало хэша токена: по нему не войти, но устройство в списке узнать можно
+
+
+def _session_id(row: AuthToken) -> str:
+    return row.token_hash[:SESSION_ID_LEN]
+
+
+@api.get("/me/sessions")
+async def list_sessions(user: UserDep, s: SessionDep, authorization: Annotated[str | None, Header()] = None):
+    """Где выполнен вход: это устройство — первым, остальные — по последнему входу."""
+    current = security.hash_token(bearer(authorization) or "")
+    rows = (await s.scalars(select(AuthToken).where(AuthToken.user_id == user.id))).all()
+    rows = sorted(rows, key=lambda r: (r.token_hash != current, -r.last_used_at.timestamp()))
+    return [{
+        "id": _session_id(r), "device": r.device or "устройство", "current": r.token_hash == current,
+        "created_at": r.created_at.isoformat() + "Z", "last_used_at": r.last_used_at.isoformat() + "Z",
+    } for r in rows]
+
+
+@api.delete("/me/sessions/{session_id}")
+async def end_session(session_id: str, user: UserDep, s: SessionDep,
+                      authorization: Annotated[str | None, Header()] = None):
+    """Выйти на одном устройстве (не на этом — для него кнопка «Выйти»)."""
+    rows = (await s.scalars(select(AuthToken).where(AuthToken.user_id == user.id))).all()
+    row = next((r for r in rows if len(session_id) == SESSION_ID_LEN and _session_id(r) == session_id), None)
+    if row is None:
+        raise HTTPException(404, "Устройство уже вышло")
+    if row.token_hash == security.hash_token(bearer(authorization) or ""):
+        raise HTTPException(400, "Это устройство — нажми «Выйти»")
+    await s.delete(row)
+    await s.commit()
+    return {"ok": True}
+
+
+@api.delete("/me/sessions")
+async def end_other_sessions(user: UserDep, s: SessionDep, authorization: Annotated[str | None, Header()] = None):
+    """Выйти на всех устройствах, кроме этого."""
+    result = await s.execute(delete(AuthToken).where(
+        AuthToken.user_id == user.id, AuthToken.token_hash != security.hash_token(bearer(authorization) or "")))
+    await s.commit()
+    return {"ok": True, "ended": result.rowcount}
 
 
 @api.post("/me/code")

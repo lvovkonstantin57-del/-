@@ -1689,15 +1689,56 @@ function accountCard() {
     row.classList.toggle("open", !form.hidden);
     haptic();
   } });
+  const devices = devicesRow();
   return el("section", { class: "panel list" },
     el("div", { class: "panel-top pad" }, el("span", { class: "eyebrow" }, "Аккаунт")),
-    row, form,
+    row, form, ...devices,
     NATIVE ? listRow({ iconName: "external", title: "Сервер", hint: serverLabel(), chevron: false }) : null,
     listRow({ iconName: "logout", title: "Выйти", danger: true, chevron: false, onclick: async () => {
       if (!(await confirmDialog("Выйти из аккаунта на этом устройстве?", "Выйти"))) return;
       await logout();
     } }),
     listRow({ iconName: "trash", title: "Удалить аккаунт", danger: true, chevron: false, onclick: deleteAccount }));
+}
+
+// Устройства, где выполнен вход: можно выйти на любом, кроме этого (для него — «Выйти»)
+function devicesRow() {
+  const box = el("div", { class: "contact-form", hidden: true });
+  const row = listRow({ iconName: "phone", title: "Устройства", hint: "где выполнен вход", onclick: () => {
+    box.hidden = !box.hidden;
+    row.classList.toggle("open", !box.hidden);
+    haptic();
+    if (!box.hidden) load();
+  } });
+  const end = async (request, done) => {
+    try { await request(); hapticResult("success"); toast(done); await load(); }
+    catch (e) { toast(e.message); hapticResult("error"); }
+  };
+  const load = async () => {
+    setChildren(box, el("p", { class: "note" }, "Загрузка…"));
+    let list;
+    try { list = await api("/api/me/sessions"); }
+    catch (e) { setChildren(box, el("p", { class: "note" }, e.message)); return; }
+    const others = list.filter((d) => !d.current);
+    setChildren(box,
+      ...list.map((d) => el("div", { class: "device-row" },
+        el("div", { class: "grow" },
+          el("b", {}, d.device),
+          el("small", {}, d.current ? "это устройство" : `заходил ${timeAgo(d.last_used_at)}`)),
+        d.current ? el("span", { class: "tag" }, "сейчас")
+          : el("button", { class: "btn tinted small danger-text", onclick: async () => {
+            if (!(await confirmDialog(`Выйти из аккаунта на «${d.device}»?`, "Выйти"))) return;
+            end(() => api(`/api/me/sessions/${d.id}`, { method: "DELETE" }), "Устройство отключено");
+          } }, "Выйти"))),
+      others.length > 1 ? el("button", { class: "btn tinted block danger-text", onclick: async () => {
+        if (!(await confirmDialog(`Выйти на всех других устройствах (${others.length})? Это устройство останется.`, "Выйти"))) return;
+        end(() => api("/api/me/sessions", { method: "DELETE" }), "Вышел на всех других устройствах");
+      } }, "Выйти на всех других") : null,
+      el("p", { class: "note" }, others.length
+        ? "Не узнаёшь устройство — нажми «Выйти» и смени пароль."
+        : "Вход выполнен только на этом устройстве."));
+  };
+  return [row, box];
 }
 
 // Подсказка «Установи на экран „Домой“» — всегда в самом низу профиля
@@ -3689,9 +3730,15 @@ function passwordRules(input) {
 const field = (label, input, hint) => el("label", { class: "field" },
   el("span", { class: "field-label" }, label), input, hint ? el("span", { class: "field-hint" }, hint) : null);
 
+// Подпись входа в списке «Устройства»: «Приложение на iPhone», «Chrome на Windows»
 function deviceName() {
-  if (NATIVE) return PLATFORM === "ios" ? "iPhone" : "Android";
-  return (isIOS() ? "iPhone, " : "") + "браузер";
+  const ua = navigator.userAgent || "";
+  if (NATIVE) return PLATFORM === "ios" ? "Приложение на iPhone" : "Приложение на Android";
+  const os = isIOS() ? (/iPad/.test(ua) ? "iPad" : "iPhone") : /Android/.test(ua) ? "Android"
+    : /Windows/.test(ua) ? "Windows" : /Mac OS X/.test(ua) ? "Mac" : /CrOS/.test(ua) ? "Chromebook" : /Linux/.test(ua) ? "Linux" : "";
+  const browser = /YaBrowser/.test(ua) ? "Яндекс Браузер" : /Edg\//.test(ua) ? "Edge" : /OPR\//.test(ua) ? "Opera"
+    : /Firefox|FxiOS/.test(ua) ? "Firefox" : /Chrome|CriOS/.test(ua) ? "Chrome" : /Safari/.test(ua) ? "Safari" : "Браузер";
+  return os ? `${browser} на ${os}` : browser;
 }
 
 function showLogin(mode = "login", note = "") {

@@ -273,6 +273,36 @@ async def test_admin_deletes_account(client, database):
     assert (await client.delete(f"/api/admin/users/{adm.id}", headers=boss.h)).status_code == 200
     assert {u["login"] for u in (await client.get("/api/admin/users", headers=boss.h)).json()} == {"owner"}
 
+
+async def test_sessions_list_and_sign_out(client, database):
+    acc = await register(client, "multi", "Много Устройств")
+    tokens = []
+    for device in ("Приложение на iPhone", "Chrome на Windows", ""):
+        r = await client.post("/api/auth/login", json={"login": "multi", "password": PASSWORD, "device": device})
+        tokens.append({"Authorization": "Bearer " + r.json()["token"]})
+
+    rows = (await client.get("/api/me/sessions", headers=acc.h)).json()
+    assert len(rows) == 4 and rows[0]["current"] and sum(r["current"] for r in rows) == 1
+    assert {r["device"] for r in rows} >= {"Приложение на iPhone", "Chrome на Windows", "устройство"}
+    # Это устройство отсюда не отключить, чужой id — не найден
+    assert (await client.delete(f"/api/me/sessions/{rows[0]['id']}", headers=acc.h)).status_code == 400
+    assert (await client.delete("/api/me/sessions/0000000000000000", headers=acc.h)).status_code == 404
+
+    iphone = next(r for r in rows if r["device"] == "Приложение на iPhone")
+    assert (await client.delete(f"/api/me/sessions/{iphone['id']}", headers=acc.h)).status_code == 200
+    assert (await client.get("/api/me", headers=tokens[0])).status_code == 401
+    assert (await client.get("/api/me", headers=tokens[1])).status_code == 200
+
+    # Чужие устройства не видны и не удаляются
+    other = await register(client, "other", "Другой Человек")
+    assert len((await client.get("/api/me/sessions", headers=other.h)).json()) == 1
+    assert (await client.delete(f"/api/me/sessions/{rows[1]['id']}", headers=other.h)).status_code == 404
+
+    r = await client.delete("/api/me/sessions", headers=acc.h)
+    assert r.json()["ended"] == 2
+    assert (await client.get("/api/me", headers=tokens[1])).status_code == 401
+    assert [r["current"] for r in (await client.get("/api/me/sessions", headers=acc.h)).json()] == [True]
+
 # --- уведомления ------------------------------------------------------------------
 
 async def test_contact_admins_and_reply(client, database):
