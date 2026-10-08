@@ -27,7 +27,7 @@ from app.api.files import attachment
 from app.attendance import AttendanceError
 from app.config import config
 from app.importer import ImportError_, clean_email, clean_group, import_any, name_key
-from app.models import ROLE_ADMIN, ROLE_OWNER, ROLE_STAROSTA, ROLE_USER, WEEK_CUSTOM, GroupInfo, Lesson, Student, User
+from app.models import ROLE_ADMIN, ROLE_OWNER, ROLE_STAROSTA, ROLE_USER, WEEK_CUSTOM, AuthToken, GroupInfo, Lesson, Student, User
 from app.users import AccountError, clean_fio
 
 log = logging.getLogger(__name__)
@@ -782,6 +782,32 @@ async def reset_password(user_id: int, user: StaffDep, s: SessionDep):
 
 
 # --- роли и команда --------------------------------------------------------------
+
+def _utc(d: datetime | None) -> str | None:
+    """Время в базе — в UTC без зоны; клиенту — с «Z», чтобы показать по местному."""
+    return d.isoformat() + "Z" if d else None
+
+
+@api.get("/admin/users")
+async def list_users(_: AdminDep, s: SessionDep):
+    """Все аккаунты: и в группах, и без группы, и команда. Новые — сверху."""
+    users_ = (await s.scalars(select(User).order_by(User.created_at.desc(), User.id.desc()))).unique().all()
+    seen = {
+        uid: (count, last)
+        for uid, count, last in await s.execute(
+            select(AuthToken.user_id, func.count(), func.max(AuthToken.last_used_at)).group_by(AuthToken.user_id))
+    }
+    out = []
+    for u in users_:
+        devices, last = seen.get(u.id, (0, None))
+        out.append({
+            "id": u.id, "full_name": u.display_name, "login": u.login, "role": u.effective_role,
+            "teacher": u.is_teacher, "group": u.group_name, "code": security.pretty_code(u.code),
+            "photo": pictures.url(u.photo), "created_at": _utc(u.created_at),
+            "last_seen": _utc(last), "devices": devices,
+        })
+    return out
+
 
 @api.put("/admin/users/{user_id}/role")
 async def change_role(user_id: int, body: RoleIn, admin: AdminDep, s: SessionDep):

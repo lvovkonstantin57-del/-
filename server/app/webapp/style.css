@@ -170,7 +170,7 @@ h1 { margin: 4px 0 2px; font-size: 34px; line-height: 1.12; font-weight: 700; le
 /* «Сейчас»: крупная карточка текущей или следующей пары */
 .hero { background: var(--hero); color: #ffffff; border-radius: 28px; padding: 20px; }
 .hero-top {
-  display: flex; justify-content: space-between; gap: 12px; font-size: 13px; font-weight: 700;
+  display: flex; flex-wrap: wrap; justify-content: space-between; gap: 6px 12px; font-size: 13px; font-weight: 700;
   letter-spacing: .04em; text-transform: uppercase; opacity: .85;
 }
 .hero-top .num { font-variant-numeric: tabular-nums; }
@@ -485,6 +485,12 @@ textarea { resize: vertical; min-height: 92px; line-height: 1.4; }
   letter-spacing: .04em; text-transform: uppercase;
 }
 .hero-link .icon { width: 14px; height: 14px; stroke-width: 2.4; }
+.hero-title { display: inline-flex; align-items: baseline; gap: 10px; min-width: 0; }
+.hero-under {
+  color: #ffffff; font-size: 13px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase;
+  text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1.5px;
+}
+button.hero-tile { text-align: left; color: inherit; }
 .hero-tiles.three { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr) minmax(0, 1fr); }
 .hero-tiles.three .hero-tile { padding: 8px 10px; }
 .hero-tiles.three .hero-tile small { font-size: 10px; letter-spacing: 0; }

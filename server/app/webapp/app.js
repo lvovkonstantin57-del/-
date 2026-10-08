@@ -1806,12 +1806,17 @@ function adminDashboard(box, st) {
   const pct = st.students ? Math.round((st.registered * 100) / st.students) : 0;
   const role = ROLE_LABELS[state.me.role];
   const hero = el("section", { class: "hero" },
-    el("div", { class: "hero-top" }, el("span", {}, "Регистрации"),
+    el("div", { class: "hero-top" },
+      el("span", { class: "hero-title" }, "Регистрации",
+        el("button", { class: "hero-under", onclick: () => { haptic(); openSection(accountsBlock()); } }, "аккаунты")),
       el("button", { class: "hero-link", onclick: () => { haptic(); openSection(statsBlock()); } }, "по группам", icon("chevron"))),
     el("div", { class: "big-line" }, el("b", {}, `${st.registered} из ${st.students}`), el("span", {}, "студентов в приложении")),
     el("div", { class: "hero-progress" }, el("div", { class: "track" }, el("div", { class: "fill", style: `width:${pct}%` })), `${pct}%`),
     el("div", { class: "hero-tiles three" },
-      statTile("без группы", st.without_group), statTile("напоминания", st.reminders), statTile("старосты", st.starostas)));
+      el("button", { class: "hero-tile", "aria-label": `Без группы: ${st.without_group}. Открыть список`,
+        onclick: () => { haptic(); openSection(accountsBlock({ filter: "nogroup" })); } },
+        el("small", {}, "без группы"), el("b", { class: "stat" }, String(st.without_group))),
+      statTile("напоминания", st.reminders), statTile("старосты", st.starostas)));
   const tiles = [
     ["users", "Группы", `${countOf(st.groups.length, "группа", "группы", "групп")} · коды для студентов`, groupsBlock],
     ["userPlus", "Студенты", "добавить по коду, роли, пароли", studentsBlock],
@@ -2050,6 +2055,88 @@ function groupsBlock() {
       + "Старосту назначь в «Студенты» → студент → Роль."),
     el("div", { class: "inline" }, name, create),
     list), load);
+}
+
+// Забыл пароль: временный пароль показываем тому, кто сбросил, — продиктовать студенту
+async function issueTempPassword(userId, name) {
+  if (!(await confirmDialog(`Выдать «${name}» временный пароль? Старый перестанет работать.`, "Выдать"))) return;
+  try {
+    const r = await api(`/api/admin/users/${userId}/password`, { method: "POST" });
+    openSheet("Временный пароль", `${name} · логин ${r.login}`, (card) => {
+      card.append(el("div", { class: "sheet-form" },
+        el("button", { class: "personal-code", onclick: () => copyText(r.password, "Пароль скопирован") }, r.password),
+        el("p", { class: "note" }, "Передай лично. Пароль показан один раз — потом его можно сменить в профиле.")));
+    });
+  } catch (e) { toast(e.message); }
+}
+
+// Все аккаунты: в группах, без группы и команда; новые — сверху
+function accountsBlock(opts = {}) {
+  const me = state.me;
+  const isOwner = me.role === "owner";
+  const search = el("input", { class: "full", type: "search", placeholder: "Поиск по ФИО, логину или группе", "aria-label": "Поиск" });
+  const counter = el("p", { class: "note", style: "margin:0" });
+  const list = el("div");
+  let users = [];
+  let filter = opts.filter || "all";
+  let openId = null;
+  const inTeam = (u) => u.role !== "user" || u.teacher;
+  const FILTERS = { all: () => true, nogroup: (u) => !u.group && !u.teacher && !isAdminRole(u.role), team: inTeam };
+  const tabs = segmented([["all", "Все"], ["nogroup", "Без группы"], ["team", "Команда"]], filter, (v) => { filter = v; draw(); });
+  tabs.classList.add("wide");
+
+  const day = (iso) => {
+    const d = new Date(iso);
+    return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+  };
+  const roleText = (u) => [u.role !== "user" ? ROLE_LABELS[u.role] : null, u.teacher ? "преподаватель" : null]
+    .filter(Boolean).join(", ") || "студент";
+
+  const panel = (u) => {
+    const line = (label, value) => el("div", { class: "item" }, el("span", { class: "grow hint-text" }, label), el("span", {}, value));
+    const canReset = u.id !== me.id && u.role !== "owner" && (isOwner || u.role !== "admin");
+    return el("div", { class: "item-panel stack" },
+      line("Логин", u.login),
+      line("Роль", roleText(u)),
+      line("Группа", u.group ? formatGroup(u.group) : "без группы"),
+      line("Личный код", u.code),
+      u.created_at ? line("Регистрация", day(u.created_at)) : null,
+      line("Последний вход", u.last_seen ? timeAgo(u.last_seen) : "не входит"),
+      line("Устройств", String(u.devices)),
+      el("div", { class: "inline" },
+        el("button", { class: "btn tinted small", onclick: () => copyText(u.code, "Код скопирован") }, "Скопировать код"),
+        canReset ? el("button", { class: "btn tinted small", onclick: () => issueTempPassword(u.id, u.full_name) }, "Сбросить пароль") : null));
+  };
+
+  const draw = () => {
+    const q = search.value.trim().toLowerCase();
+    const byFilter = users.filter(FILTERS[filter]);
+    const shown = byFilter.filter((u) => !q || [u.full_name, u.login, u.group, u.group && formatGroup(u.group)]
+      .join(" ").toLowerCase().includes(q));
+    counter.textContent = `${countOf(byFilter.length, "аккаунт", "аккаунта", "аккаунтов")}` +
+      (filter === "all" ? ` · без группы ${users.filter(FILTERS.nogroup).length}` : "");
+    setChildren(list, ...shown.flatMap((u) => {
+      const open = openId === u.id;
+      const tag = u.role !== "user" || u.teacher ? el("span", { class: "tag" }, roleText(u)) : null;
+      const sub = [u.login, u.group ? formatGroup(u.group) : inTeam(u) ? null : "без группы"].filter(Boolean).join(" · ");
+      const head = el("button", { class: "item item-btn" + (open ? " open" : ""), "aria-expanded": String(open), onclick: () => {
+        openId = open ? null : u.id;
+        haptic();
+        draw();
+      } },
+        el("span", { class: "mini-avatar" }, avatarNode(u.full_name, u.photo)),
+        el("div", { class: "grow" }, el("div", {}, u.full_name), el("div", { class: "sub" }, tag, sub)),
+        el("span", { class: "chev-icon" }, icon("chevron")));
+      return open ? [head, panel(u)] : [head];
+    }));
+    if (!shown.length) setChildren(list, el("p", { class: "note" }, byFilter.length ? "Никого не нашёл" : "Здесь пока пусто"));
+  };
+  search.oninput = draw;
+  const load = async () => {
+    try { users = await api("/api/admin/users"); draw(); }
+    catch (e) { setChildren(list, el("p", { class: "note" }, e.message)); }
+  };
+  return block("Аккаунты", el("div", { class: "stack" }, tabs, search, counter, el("section", { class: "panel list" }, list)), load);
 }
 
 function statsBlock() {
@@ -2371,18 +2458,7 @@ function studentsBlock(opts = {}) {
     return el("div", { class: "stack tight" }, el("span", { class: "field-label" }, "Роль"), seg);
   };
 
-  // Забыл пароль: временный пароль показываем тому, кто сбросил, — продиктовать студенту
-  const resetPassword = async (s) => {
-    if (!(await confirmDialog(`Выдать «${s.full_name}» временный пароль? Старый перестанет работать.`, "Выдать"))) return;
-    try {
-      const r = await api(`/api/admin/users/${s.user_id}/password`, { method: "POST" });
-      openSheet("Временный пароль", `${s.full_name} · логин ${r.login}`, (card) => {
-        card.append(el("div", { class: "sheet-form" },
-          el("button", { class: "personal-code", onclick: () => copyText(r.password, "Пароль скопирован") }, r.password),
-          el("p", { class: "note" }, "Передай студенту лично. Пароль показан один раз — потом его можно сменить в профиле.")));
-      });
-    } catch (e) { toast(e.message); }
-  };
+  const resetPassword = (s) => issueTempPassword(s.user_id, s.full_name);
 
   const panel = (s) => {
     const name = el("input", { value: s.full_name, "aria-label": "ФИО" });

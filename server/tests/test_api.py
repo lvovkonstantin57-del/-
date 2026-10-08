@@ -229,6 +229,26 @@ async def test_starosta_resets_password(client, database):
     assert (await client.post(f"/api/admin/users/{boss.id}/password", headers=star.h)).status_code == 403
 
 
+
+async def test_admin_lists_all_accounts(client, database):
+    boss = await owner(client)
+    await client.post("/api/admin/groups", json={"name": "А"}, headers=boss.h)
+    stud = await register(client, "stud", "Студент Группы")
+    lone = await register(client, "lone", "Без Группы")
+    await client.post("/api/admin/members", json={"code": stud.code, "group": "А"}, headers=boss.h)
+
+    r = await client.get("/api/admin/users", headers=boss.h)
+    assert r.status_code == 200
+    rows = {u["login"]: u for u in r.json()}
+    assert set(rows) == {"owner", "stud", "lone"}
+    assert r.json()[0]["login"] == "lone"  # новые — сверху
+    assert rows["stud"]["group"] == "А" and rows["lone"]["group"] is None
+    assert rows["owner"]["role"] == "owner"
+    assert rows["lone"]["devices"] == 1 and rows["lone"]["last_seen"].endswith("Z")
+    assert "password_hash" not in rows["lone"]
+    # Только админам
+    assert (await client.get("/api/admin/users", headers=lone.h)).status_code == 403
+
 # --- уведомления ------------------------------------------------------------------
 
 async def test_contact_admins_and_reply(client, database):
