@@ -3833,6 +3833,8 @@ async function init() {
   if (NATIVE) root.classList.add("native", "platform-" + PLATFORM);
   window.matchMedia?.("(prefers-color-scheme: dark)").addEventListener?.("change", applyScheme);
   applyScheme();
+  // iOS включает :active (серый отклик кнопок) только при обработчике касаний на странице
+  document.addEventListener("touchstart", () => {}, { passive: true });
   // Service worker — только у сайта; в сборке приложения (mobile/www) его нет
   if (!window.NativePlugins && "serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
 

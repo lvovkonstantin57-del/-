@@ -1,5 +1,6 @@
 /* Apple-стиль: сгруппированные скруглённые карточки, крупные заголовки, «жидкое стекло» на таббаре */
 :root {
+  --press: grayscale(.45) brightness(.86);
   --page: #f2f2f7;
   --card: #ffffff;
   --text: #000000;
@@ -31,6 +32,7 @@
   --spring: cubic-bezier(.32, 1.35, .5, 1);
 }
 :root[data-scheme=dark] {
+  --press: grayscale(.45) brightness(1.25);
   --accent-ink: #6cc9c8;
   --change: #ffb340;
   --change-tint: rgba(255, 159, 10, .2);
@@ -889,3 +891,8 @@ button.att-line:active { transform: scale(.98); }
 .journal-open b { display: block; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
 .journal-open .hint { display: block; color: var(--hint); font-size: 13px; }
 .journal-row .value { flex: none; color: var(--hint); font-size: 15px; font-variant-numeric: tabular-nums; }
+
+/* Отклик на нажатие: пока палец на кнопке, она уходит в серый (в тёмной теме — светлеет) */
+button:not(:disabled):active, a[href]:active, [role=button]:active {
+  filter: var(--press);
+}
