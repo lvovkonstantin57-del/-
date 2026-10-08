@@ -1,5 +1,6 @@
 # Caddy сам получает и продлевает сертификат Let's Encrypt для домена
-{$DOMAIN} {
+# EXTRA_DOMAINS — ещё адреса через пробел (например, прежний <IP>.sslip.io)
+{$DOMAIN} {$EXTRA_DOMAINS} {
 	encode gzip
 	reverse_proxy app:8000
 }

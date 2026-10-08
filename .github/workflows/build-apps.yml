@@ -15,7 +15,7 @@ on:
   workflow_dispatch:
     inputs:
       api_url:
-        description: "Адрес сервера (https://…). Пусто — переменная API_URL или https://135-106-163-67.sslip.io"
+        description: "Адрес сервера (https://…). Пусто — переменная API_URL или https://mpgu-timetable.ru"
         required: false
         default: ""
 
@@ -28,7 +28,7 @@ concurrency:
 
 env:
   # Последний вариант — сервер, развёрнутый install.sh на VPS
-  API_URL: ${{ inputs.api_url || vars.API_URL || 'https://135-106-163-67.sslip.io' }}
+  API_URL: ${{ inputs.api_url || vars.API_URL || 'https://mpgu-timetable.ru' }}
   APP_NAME: ${{ vars.APP_NAME }}
   VERSION_NAME: "1.0.${{ github.run_number }}"
   VERSION_CODE: ${{ github.run_number }}

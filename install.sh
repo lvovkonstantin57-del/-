@@ -14,7 +14,10 @@
 #
 # Повторный запуск той же командой обновляет сервер до свежей версии из GitHub; .env и база
 # остаются как были. Настройки через переменные перед bash:
-#   DOMAIN=schedule.example.ru   свой домен вместо sslip.io (A-запись должна указывать на сервер)
+#   DOMAIN=schedule.example.ru   свой домен вместо sslip.io (A-запись должна указывать на сервер).
+#                                Прежний адрес и <IP>.sslip.io продолжают открываться — на них
+#                                настроены уже установленные приложения
+#   EXTRA_DOMAINS="a.ru b.ru"    ещё адреса того же сервера (запоминаются в .env)
 #   NO_CADDY=1                   HTTPS настроишь сам в своём nginx/Caddy (проксируй на APP_PORT)
 #   APP_PORT=8081                порт на 127.0.0.1 для сервера приложения (по умолчанию 8080
 #                                или первый свободный после него)
@@ -106,6 +109,15 @@ set_env() {
   if grep -q "^$1=" .env; then sed -i "s|^$1=.*|$1=$2|" .env; else printf '%s=%s\n' "$1" "$2" >> .env; fi
 }
 
+# Дополнительный адрес сервера: Caddy отдаёт приложение и по нему
+add_extra_domain() {
+  local cur
+  cur=$(get_env EXTRA_DOMAINS)
+  [ -n "$1" ] && [ "$1" != "$(get_env DOMAIN)" ] && [ "$1" != schedule.example.ru ] || return 0
+  case " $cur " in *" $1 "*) return 0 ;; esac
+  set_env EXTRA_DOMAINS "${cur:+$cur }$1"
+}
+
 fetch_code() {
   if [ -d "$DIR/.git" ]; then
     say "Обновляю код в $DIR"
@@ -126,13 +138,21 @@ configure() {
     cp .env.example .env
     chmod 600 .env
   fi
+  local previous ip d
+  previous=$(get_env DOMAIN)
   if [ -n "${DOMAIN:-}" ]; then
     set_env DOMAIN "$DOMAIN"
+    add_extra_domain "$previous"
   elif [ -z "$(get_env DOMAIN)" ] || [ "$(get_env DOMAIN)" = "schedule.example.ru" ]; then
-    local ip
     ip=$(public_ip) || die "не смог узнать IP сервера. Укажи адрес сам: DOMAIN=1-2-3-4.sslip.io (цифры — IP через дефис)"
     set_env DOMAIN "${ip//./-}.sslip.io"
   fi
+  # Старый адрес <IP>.sslip.io остаётся рабочим и со своим доменом: он вшит в прежние сборки приложения
+  case "$(get_env DOMAIN)" in
+    *.sslip.io) ;;
+    *) if ip=$(public_ip); then add_extra_domain "${ip//./-}.sslip.io"; fi ;;
+  esac
+  for d in ${EXTRA_DOMAINS:-}; do add_extra_domain "${d%,}"; done
   [ -n "$(get_env OWNER_CODE)" ] || set_env OWNER_CODE "$(new_owner_code)"
   docker volume inspect "${PROJECT}_app_data" >/dev/null 2>&1 || FIRST_RUN=1
 }
@@ -229,7 +249,7 @@ caddy_sites() {
 }
 
 configure_host_caddy() {
-  local domain port tmp
+  local domain port tmp sites extra d
   domain=$(get_env DOMAIN)
   port=$(get_env APP_PORT)
   if caddy_sites | grep -qxF "$domain"; then
@@ -239,6 +259,12 @@ configure_host_caddy() {
     domain="app.$domain"
     set_env DOMAIN "$domain"
   fi
+  # Дополнительные адреса, которые не заняты другими сайтами
+  sites=$(caddy_sites)
+  extra=""
+  for d in $(get_env EXTRA_DOMAINS); do
+    [ "$d" != "$domain" ] && ! grep -qxF "$d" <<<"$sites" && extra="$extra $d"
+  done
 
   tmp=$(mktemp)
   # Убираем свой прошлый блок и пустые строки в конце, дописываем свежий
@@ -250,7 +276,7 @@ configure_host_caddy() {
     { printf "%s%s\n", blank, $0; blank = "" }
   ' "$CADDYFILE" > "$tmp"
   printf '\n%s\n%s {\n\tencode gzip\n\treverse_proxy 127.0.0.1:%s\n}\n%s\n' \
-    "$BLOCK_BEGIN" "$domain" "$port" "$BLOCK_END" >> "$tmp"
+    "$BLOCK_BEGIN" "$domain$extra" "$port" "$BLOCK_END" >> "$tmp"
   if cmp -s "$tmp" "$CADDYFILE"; then
     rm -f "$tmp"
     return
@@ -426,6 +452,7 @@ summary() {
   domain=$(get_env DOMAIN)
   printf '\n\033[1;32m✅ Сервер работает\033[0m\n\n'
   printf '  Адрес сервера:        https://%s\n' "$domain"
+  [ -z "$(get_env EXTRA_DOMAINS)" ] || printf '  Тоже открываются:     %s\n' "$(get_env EXTRA_DOMAINS)"
   printf '  Код главного админа:  %s\n\n' "$(get_env OWNER_CODE)"
   if [ -n "$DOMAIN_NOTE" ]; then
     printf '  Адрес с «app.»: %s.\n' "$DOMAIN_NOTE"
