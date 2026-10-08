@@ -809,6 +809,25 @@ async def list_users(_: AdminDep, s: SessionDep):
     return out
 
 
+@api.delete("/admin/users/{user_id}")
+async def delete_user(user_id: int, admin: AdminDep, s: SessionDep):
+    """Удалить чужой аккаунт: вход, уведомления, фото. Запись в списке группы и журнал остаются."""
+    target = await s.get(User, user_id)
+    if target is None:
+        raise HTTPException(404, "Пользователь не найден")
+    if target.id == admin.id:
+        raise HTTPException(400, "Свой аккаунт удаляется в профиле")
+    if target.is_owner:
+        raise HTTPException(403, "Аккаунт главного админа удалить нельзя")
+    if target.is_admin and not admin.is_owner:
+        raise HTTPException(403, "Админа удаляет только главный админ")
+    login = target.login
+    await s.delete(target)
+    await s.commit()
+    log.info("%s %s удалил аккаунт %s (%s)", admin.role, admin.id, user_id, login)
+    return {"ok": True}
+
+
 @api.put("/admin/users/{user_id}/role")
 async def change_role(user_id: int, body: RoleIn, admin: AdminDep, s: SessionDep):
     target = await s.get(User, user_id)

@@ -2092,6 +2092,19 @@ function accountsBlock(opts = {}) {
   const roleText = (u) => [u.role !== "user" ? ROLE_LABELS[u.role] : null, u.teacher ? "преподаватель" : null]
     .filter(Boolean).join(", ") || "студент";
 
+  const remove = async (u) => {
+    const q = `Удалить аккаунт «${u.full_name}» (логин ${u.login})? Войти в него будет нельзя, уведомления и фото удалятся. ` +
+      (u.group ? "Строка в списке группы и отметки в журнале останутся." : "Отметки в журнале останутся.");
+    if (!(await confirmDialog(q, "Удалить"))) return;
+    try {
+      await api(`/api/admin/users/${u.id}`, { method: "DELETE" });
+      hapticResult("success");
+      toast("Аккаунт удалён");
+      openId = null;
+      await load();
+    } catch (e) { toast(e.message); hapticResult("error"); }
+  };
+
   const panel = (u) => {
     const line = (label, value) => el("div", { class: "item" }, el("span", { class: "grow hint-text" }, label), el("span", {}, value));
     const canReset = u.id !== me.id && u.role !== "owner" && (isOwner || u.role !== "admin");
@@ -2105,7 +2118,8 @@ function accountsBlock(opts = {}) {
       line("Устройств", String(u.devices)),
       el("div", { class: "inline" },
         el("button", { class: "btn tinted small", onclick: () => copyText(u.code, "Код скопирован") }, "Скопировать код"),
-        canReset ? el("button", { class: "btn tinted small", onclick: () => issueTempPassword(u.id, u.full_name) }, "Сбросить пароль") : null));
+        canReset ? el("button", { class: "btn tinted small", onclick: () => issueTempPassword(u.id, u.full_name) }, "Сбросить пароль") : null,
+        canReset ? el("button", { class: "btn tinted small danger-text", onclick: () => remove(u) }, "Удалить аккаунт") : null));
   };
 
   const draw = () => {

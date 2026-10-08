@@ -249,6 +249,30 @@ async def test_admin_lists_all_accounts(client, database):
     # Только админам
     assert (await client.get("/api/admin/users", headers=lone.h)).status_code == 403
 
+
+async def test_admin_deletes_account(client, database):
+    boss = await owner(client)
+    await client.post("/api/admin/groups", json={"name": "А"}, headers=boss.h)
+    stud = await register(client, "stud", "Студент Группы")
+    adm = await register(client, "adm", "Второй Админ")
+    await client.post("/api/admin/members", json={"code": stud.code, "group": "А"}, headers=boss.h)
+    await client.put(f"/api/admin/users/{adm.id}/role", json={"role": "admin"}, headers=boss.h)
+
+    # Админ не удаляет главного, другого админа и себя
+    assert (await client.delete(f"/api/admin/users/{boss.id}", headers=adm.h)).status_code == 403
+    assert (await client.delete(f"/api/admin/users/{adm.id}", headers=adm.h)).status_code == 400
+    assert (await client.delete(f"/api/admin/users/{stud.id}", headers=stud.h)).status_code == 403
+
+    assert (await client.delete(f"/api/admin/users/{stud.id}", headers=adm.h)).status_code == 200
+    assert (await client.get("/api/me", headers=stud.h)).status_code == 401
+    assert (await client.post("/api/auth/login", json={"login": "stud", "password": PASSWORD})).status_code == 401
+    # Строка в списке группы осталась — уже без аккаунта
+    rows = (await client.get("/api/admin/students", headers=boss.h)).json()
+    assert [(r["full_name"], r["linked"]) for r in rows] == [("Студент Группы", False)]
+    # Админа удаляет только главный
+    assert (await client.delete(f"/api/admin/users/{adm.id}", headers=boss.h)).status_code == 200
+    assert {u["login"] for u in (await client.get("/api/admin/users", headers=boss.h)).json()} == {"owner"}
+
 # --- уведомления ------------------------------------------------------------------
 
 async def test_contact_admins_and_reply(client, database):
