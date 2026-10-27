@@ -4076,6 +4076,7 @@ function showLogin(mode = "login", note = "") {
   setChildren(body, form,
     el("button", { class: "btn tinted block", onclick: () => showLogin("register") }, "Зарегистрироваться"),
     el("p", { class: "note" }, "Забыл пароль? Староста или админ выдаст временный."),
+    NATIVE ? null : el("a", { class: "link-btn", href: "/raspisanie" }, "Расписание групп без входа"),
     serverRow);
 }
 

@@ -3,7 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
-  <title>Расписание МПГУ</title>
+  <title>Расписание МПГУ — пары, переносы и отметка на паре</title>
+  <meta name="description" content="Расписание пар МПГУ на неделю — быстро и удобно с телефона: аудитории, преподаватели, переносы, напоминания и отметка на паре.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Расписание МПГУ">
+  <meta property="og:description" content="Расписание пар МПГУ на неделю: аудитории, переносы, напоминания и отметка на паре по QR-коду.">
+  <meta property="og:image" content="icon-512.png">
   <!-- PWA: установка на экран «Домой» -->
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icon-192.png">
@@ -17,6 +22,7 @@
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
+  <noscript><p><a href="/raspisanie">Расписание групп МПГУ без входа</a></p></noscript>
   <!-- Экран загрузки: виден сразу, пока грузится приложение; app.js убирает его -->
   <div id="splash" class="splash" role="status" aria-live="polite">
     <span class="logo splash-logo" aria-hidden="true"></span>

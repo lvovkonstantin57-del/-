@@ -27,6 +27,11 @@ class Config:
     # Название в приложении и в уведомлениях
     app_name: str = field(default_factory=lambda: _env("APP_NAME", "Расписание МПГУ"))
     cors_origins: str = field(default_factory=lambda: _env("CORS_ORIGINS", DEFAULT_CORS))
+    # Основной адрес сайта (его же пишет install.sh): для ссылок в sitemap.xml и rel=canonical
+    domain: str = field(default_factory=lambda: _env("DOMAIN"))
+    # Расписание групп открыто без входа — страницы /raspisanie/<группа> для поисковиков и ссылок
+    # в чатах; PUBLIC_SCHEDULE=0 — выключить
+    public_schedule: bool = field(default_factory=lambda: _env("PUBLIC_SCHEDULE", "1") not in ("0", "no", "false"))
     host: str = field(default_factory=lambda: _env("HOST", "0.0.0.0"))
     port: int = field(default_factory=lambda: int(_env("PORT", "8000")))
 
@@ -37,6 +42,14 @@ class Config:
     @property
     def default_semester_start(self) -> date:
         return date.fromisoformat(self.semester_start)
+
+    @property
+    def site_url(self) -> str:
+        """https://<домен> из DOMAIN; пусто — домен не задан (берём адрес из запроса)."""
+        d = self.domain.strip().strip("/")
+        if not d or d == "schedule.example.ru":
+            return ""
+        return d if d.startswith("http") else f"https://{d}"
 
     @property
     def cors_list(self) -> list[str]:

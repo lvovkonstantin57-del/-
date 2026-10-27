@@ -21,6 +21,7 @@ from app.api import changes as changes_api
 from app.api import journal as journal_api
 from app.api import notifications as notifications_api
 from app.api import pictures as pictures_api
+from app.api import public as public_api
 from app.api import teacher as teacher_api
 from app.api.deps import AdminDep, OwnerDep, SessionDep, StaffDep, UserDep, check_group
 from app.api.files import attachment
@@ -924,6 +925,8 @@ def index_html() -> str:
     html = (WEBAPP_DIR / "index.html").read_text(encoding="utf-8")
     for a in assets:
         html = html.replace(f'"{a}"', f'"{a}?v={version}"')
+    if config.site_url:  # один адрес для поисковиков, даже если сайт открывается по нескольким
+        html = html.replace("</title>", f'</title>\n  <link rel="canonical" href="{config.site_url}/">', 1)
     return html
 
 
@@ -942,6 +945,7 @@ def create_app() -> FastAPI:
     app.include_router(journal_api.api)
     app.include_router(pictures_api.api)
     app.include_router(teacher_api.api)
+    app.include_router(public_api.api)
 
     @app.exception_handler(AttendanceError)
     async def attendance_error(_: Request, e: AttendanceError):
